@@ -6705,6 +6705,7 @@ YDL_OPTIONS = {
     "format": "bestaudio/best",
     "noplaylist": True,
     "quiet": True,
+    "cookiefile": "cookies.txt",
     "no_warnings": True,
     "default_search": "ytsearch",
     "source_address": "0.0.0.0",
