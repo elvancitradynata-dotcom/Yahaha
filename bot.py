@@ -7088,7 +7088,7 @@ async def chat_ai_cmd(ctx, *, pesan: str = None):
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: client.chat.completions.create(
-                    model="llama3-8b-8192",
+                    model="llama-3.1-8b-instant",
                     messages=[
                         {
                             "role": "system",
@@ -7219,7 +7219,7 @@ async def editfoto_cmd(ctx, *, instruksi: str = None):
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: client.chat.completions.create(
-                    model="llama-3.2-11b-vision-preview",
+                    model="meta-llama/llama-4-scout-17b-16e-instruct",
                     messages=[
                         {
                             "role": "user",
