@@ -1,8 +1,26 @@
-discord.py[voice]
-Pillow
-aiohttp
-pytz
-yt-dlp
-requests
-PyNaCl
-python-dotenv
+# Discord Bot — Asisten Lurah BFL
+# Install: pip install -r requirements.txt
+
+# Discord
+discord.py>=2.3.2
+
+# HTTP & Async
+aiohttp>=3.9.0
+requests>=2.31.0
+
+# Image processing (rank card & banner generator)
+Pillow>=10.0.0
+
+# Timezone support
+pytz>=2024.1
+
+# AI Chat (Claude)
+anthropic>=0.28.0
+
+# YouTube / SoundCloud music (opsional — aktifkan jika pakai !play)
+yt-dlp>=2024.1.0
+
+# FFmpeg diperlukan untuk musik — install via sistem (bukan pip):
+# Ubuntu/Debian: sudo apt install ffmpeg
+# Windows: https://ffmpeg.org/download.html
+# pella.app / Railway: sudah tersedia secara default
