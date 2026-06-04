@@ -4,7 +4,7 @@ from discord.ui import Button, View, Select
 import json, os, asyncio, aiohttp, datetime, re, random, math
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io, requests, colorsys, pytz
-import google.generativeai as genai
+from groq import Groq
 
 # ═══════════════════════════════════════════════════════
 #  KONFIGURASI
@@ -17,7 +17,7 @@ TIKTOK_CHECK_CHANNEL_ID = int(os.environ["TIKTOK_CHECK_CHANNEL_ID"])
 TICKET_CHANNEL_ID       = int(os.environ["TICKET_CHANNEL_ID"])
 VOICE_CATEGORY_ID       = int(os.environ["VOICE_CATEGORY_ID"])
 ADMIN_BANK_ID           = "483284166268420096"   # ID admin bank — sumber hadiah game
-GEMINI_API_KEY          = os.environ.get("GEMINI_API_KEY", "")
+GROQ_API_KEY            = os.environ.get("GROQ_API_KEY", "")
 
 # AI Chat config
 AI_CHAT_DAILY_LIMIT = 10          # Maksimal !chat per user per hari
@@ -7034,7 +7034,7 @@ async def music_nowplaying(ctx):
 # ═══════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════
-#  COMMAND !chat — Chat dengan AI (Gemini)
+#  COMMAND !chat — Chat dengan AI (Groq)
 # ═══════════════════════════════════════════════════════
 
 @bot.command(name="chat", aliases=["ai", "tanya"])
@@ -7055,9 +7055,9 @@ async def chat_ai_cmd(ctx, *, pesan: str = None):
         embed.set_footer(text="Asisten Lurah BFL • AI Chat")
         return await ctx.send(embed=embed)
 
-    if not GEMINI_API_KEY:
+    if not GROQ_API_KEY:
         return await ctx.send(
-            "❌ Fitur AI belum dikonfigurasi. Hubungi admin untuk mengatur `GEMINI_API_KEY`.",
+            "❌ Fitur AI belum dikonfigurasi. Hubungi admin untuk mengatur `GROQ_API_KEY`.",
             delete_after=10
         )
 
@@ -7084,20 +7084,26 @@ async def chat_ai_cmd(ctx, *, pesan: str = None):
 
     async with ctx.typing():
         try:
-            genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash",
-                system_instruction=(
-                    "Kamu adalah Asisten Lurah BFL, asisten AI dari server Discord BFL (Boyolali Football League). "
-                    "Kamu ramah, santai, dan menggunakan bahasa Indonesia yang natural. "
-                    "Jawab dengan ringkas dan jelas. Gunakan emoji seperlunya agar lebih ekspresif."
-                )
-            )
+            client = Groq(api_key=GROQ_API_KEY)
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: model.generate_content(pesan)
+                lambda: client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "Kamu adalah Asisten Lurah BFL, asisten AI dari server Discord BFL (Boyolali Football League). "
+                                "Kamu ramah, santai, dan menggunakan bahasa Indonesia yang natural. "
+                                "Jawab dengan ringkas dan jelas. Gunakan emoji seperlunya agar lebih ekspresif."
+                            )
+                        },
+                        {"role": "user", "content": pesan}
+                    ],
+                    max_tokens=1000
+                )
             )
-            jawaban = response.text
+            jawaban = response.choices[0].message.content
 
             if len(jawaban) > 3900:
                 jawaban = jawaban[:3900] + "\n\n*...jawaban terpotong karena terlalu panjang.*"
@@ -7110,7 +7116,7 @@ async def chat_ai_cmd(ctx, *, pesan: str = None):
             embed.add_field(name=f"❓ {ctx.author.display_name} bertanya:", value=f"> {pesan[:200]}", inline=False)
             embed.add_field(name="💬 Jawaban:", value=jawaban, inline=False)
             embed.set_footer(
-                text=f"Asisten Lurah BFL • AI Chat (Gemini) | Sisa kuota hari ini: {sisa_baru}/{AI_CHAT_DAILY_LIMIT}",
+                text=f"Asisten Lurah BFL • AI Chat (Groq) | Sisa kuota hari ini: {sisa_baru}/{AI_CHAT_DAILY_LIMIT}",
                 icon_url=ctx.author.display_avatar.url
             )
             await ctx.send(embed=embed)
@@ -7121,7 +7127,7 @@ async def chat_ai_cmd(ctx, *, pesan: str = None):
 
 
 # ═══════════════════════════════════════════════════════
-#  COMMAND !editfoto — Edit foto dengan AI Gemini (1x/hari)
+#  COMMAND !editfoto — Edit foto dengan AI Groq Vision (1x/hari)
 # ═══════════════════════════════════════════════════════
 
 @bot.command(name="editfoto", aliases=["editphoto", "foto"])
@@ -7144,9 +7150,9 @@ async def editfoto_cmd(ctx, *, instruksi: str = None):
         embed.set_footer(text="Asisten Lurah BFL • Edit Foto AI")
         return await ctx.send(embed=embed)
 
-    if not GEMINI_API_KEY:
+    if not GROQ_API_KEY:
         return await ctx.send(
-            "❌ Fitur AI belum dikonfigurasi. Hubungi admin untuk mengatur `GEMINI_API_KEY`.",
+            "❌ Fitur AI belum dikonfigurasi. Hubungi admin untuk mengatur `GROQ_API_KEY`.",
             delete_after=10
         )
 
@@ -7185,21 +7191,22 @@ async def editfoto_cmd(ctx, *, instruksi: str = None):
 
     async with ctx.typing():
         try:
+            import base64
+
             # Download foto
             img_bytes = await foto.read()
             pil_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
 
-            # Simpan ke buffer untuk dikirim ke Gemini
+            # Resize jika terlalu besar (Groq limit ~4MB)
+            max_size = (1280, 1280)
+            pil_image.thumbnail(max_size, Image.LANCZOS)
+
             buf_in = io.BytesIO()
-            pil_image.save(buf_in, format="JPEG")
+            pil_image.save(buf_in, format="JPEG", quality=85)
             buf_in.seek(0)
-
-            genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel("gemini-1.5-flash")
-
-            # Upload gambar ke Gemini menggunakan inline data
-            import base64
             img_b64 = base64.b64encode(buf_in.read()).decode("utf-8")
+
+            client = Groq(api_key=GROQ_API_KEY)
 
             prompt_text = (
                 f"Kamu adalah editor foto profesional. "
@@ -7211,13 +7218,25 @@ async def editfoto_cmd(ctx, *, instruksi: str = None):
 
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: model.generate_content([
-                    {"mime_type": "image/jpeg", "data": img_b64},
-                    prompt_text
-                ])
+                lambda: client.chat.completions.create(
+                    model="llama-3.2-11b-vision-preview",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                                },
+                                {"type": "text", "text": prompt_text}
+                            ]
+                        }
+                    ],
+                    max_tokens=1000
+                )
             )
 
-            hasil = response.text
+            hasil = response.choices[0].message.content
             if len(hasil) > 3900:
                 hasil = hasil[:3900] + "\n\n*...deskripsi terpotong karena terlalu panjang.*"
 
@@ -7230,7 +7249,7 @@ async def editfoto_cmd(ctx, *, instruksi: str = None):
             embed.add_field(name="🤖 Respons AI:", value=hasil, inline=False)
             embed.set_thumbnail(url=foto.url)
             embed.set_footer(
-                text="Asisten Lurah BFL • Edit Foto AI (Gemini) | Kuota: 1x/hari",
+                text="Asisten Lurah BFL • Edit Foto AI (Groq Vision) | Kuota: 1x/hari",
                 icon_url=ctx.author.display_avatar.url
             )
             await ctx.send(embed=embed)

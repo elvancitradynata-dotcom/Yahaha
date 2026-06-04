@@ -1,26 +1,6 @@
-# Discord Bot — Asisten Lurah BFL
-# Install: pip install -r requirements.txt
-
-# Discord
-discord.py>=2.3.2
-
-# HTTP & Async
-aiohttp>=3.9.0
-requests>=2.31.0
-
-# Image processing (rank card & banner generator)
-Pillow>=10.0.0
-
-# Timezone support
-pytz>=2024.1
-
-# AI Chat (Gemini)
-google-generativeai>=0.5.0
-
-# YouTube / SoundCloud music (opsional — aktifkan jika pakai !play)
-yt-dlp>=2024.1.0
-
-# FFmpeg diperlukan untuk musik — install via sistem (bukan pip):
-# Ubuntu/Debian: sudo apt install ffmpeg
-# Windows: https://ffmpeg.org/download.html
-# pella.app / Railway: sudah tersedia secara default
+discord.py==2.3.2
+groq==0.9.0
+Pillow==10.3.0
+aiohttp==3.9.5
+requests==2.31.0
+pytz==2024.1
