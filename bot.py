@@ -7086,7 +7086,7 @@ async def chat_ai_cmd(ctx, *, pesan: str = None):
         try:
             genai.configure(api_key=GEMINI_API_KEY)
             model = genai.GenerativeModel(
-                model_name="gemini-2.0-flash",
+                model_name="gemini-1.5-flash-latest",
                 system_instruction=(
                     "Kamu adalah Asisten Lurah BFL, asisten AI dari server Discord BFL (Boyolali Football League). "
                     "Kamu ramah, santai, dan menggunakan bahasa Indonesia yang natural. "
@@ -7195,7 +7195,7 @@ async def editfoto_cmd(ctx, *, instruksi: str = None):
             buf_in.seek(0)
 
             genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
             # Upload gambar ke Gemini menggunakan inline data
             import base64
