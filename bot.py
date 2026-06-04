@@ -4,6 +4,7 @@ from discord.ui import Button, View, Select
 import json, os, asyncio, aiohttp, datetime, re, random, math
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io, requests, colorsys, pytz
+import google.generativeai as genai
 
 # ═══════════════════════════════════════════════════════
 #  KONFIGURASI
@@ -16,6 +17,12 @@ TIKTOK_CHECK_CHANNEL_ID = int(os.environ["TIKTOK_CHECK_CHANNEL_ID"])
 TICKET_CHANNEL_ID       = int(os.environ["TICKET_CHANNEL_ID"])
 VOICE_CATEGORY_ID       = int(os.environ["VOICE_CATEGORY_ID"])
 ADMIN_BANK_ID           = "483284166268420096"   # ID admin bank — sumber hadiah game
+GEMINI_API_KEY          = os.environ.get("GEMINI_API_KEY", "")
+
+# AI Chat config
+AI_CHAT_DAILY_LIMIT = 10          # Maksimal !chat per user per hari
+AI_CHAT_FILE        = "ai_chat_usage.json"   # tracking penggunaan harian
+EDITFOTO_FILE       = "editfoto_usage.json"  # tracking penggunaan !editfoto harian
 
 WIB = pytz.timezone("Asia/Jakarta")
 
@@ -47,6 +54,7 @@ WELCOME_CFG_FILE = "welcome_config.json"
 POLLS_FILE       = "polls.json"
 JOIN_TRACKING_FILE = "join_tracking.json"   # tracking kapan user join server
 BCASH_REWARD_FILE  = "bcash_reward_channels.json"  # channel yang beri Bcash saat pesan
+MSG_COUNT_FILE     = "message_counts.json"          # tracking total pesan per user (semua waktu)
 
 # ═══════════════════════════════════════════════════════
 #  LEVEL CONFIG
@@ -293,6 +301,63 @@ def load_join_tracking():  return load_json(JOIN_TRACKING_FILE, default={})
 def save_join_tracking(d): save_json(JOIN_TRACKING_FILE, d)
 def load_bcash_reward_channels(): return load_json(BCASH_REWARD_FILE, default={})
 def save_bcash_reward_channels(d): save_json(BCASH_REWARD_FILE, d)
+
+def load_msg_counts():  return load_json(MSG_COUNT_FILE, default={})
+def save_msg_counts(d): save_json(MSG_COUNT_FILE, d)
+
+def increment_msg_count(uid: str):
+    """Tambah 1 ke total pesan user (dipanggil tiap on_message)."""
+    data = load_msg_counts()
+    data[uid] = data.get(uid, 0) + 1
+    save_msg_counts(data)
+
+def get_msg_count(uid: str) -> int:
+    return load_msg_counts().get(uid, 0)
+
+def load_ai_chat_usage():  return load_json(AI_CHAT_FILE, default={})
+def save_ai_chat_usage(d): save_json(AI_CHAT_FILE, d)
+
+def get_ai_chat_remaining(uid: str) -> int:
+    """Kembalikan sisa kuota !chat hari ini untuk user."""
+    today = datetime.datetime.now(WIB).strftime("%Y-%m-%d")
+    data  = load_ai_chat_usage()
+    user  = data.get(uid, {})
+    if user.get("date") != today:
+        return AI_CHAT_DAILY_LIMIT
+    return max(0, AI_CHAT_DAILY_LIMIT - user.get("count", 0))
+
+def consume_ai_chat(uid: str) -> bool:
+    """Kurangi kuota !chat. Return True jika berhasil, False jika habis."""
+    today = datetime.datetime.now(WIB).strftime("%Y-%m-%d")
+    data  = load_ai_chat_usage()
+    user  = data.get(uid, {})
+    if user.get("date") != today:
+        user = {"date": today, "count": 0}
+    if user["count"] >= AI_CHAT_DAILY_LIMIT:
+        data[uid] = user
+        save_ai_chat_usage(data)
+        return False
+    user["count"] += 1
+    data[uid] = user
+    save_ai_chat_usage(data)
+    return True
+
+# ── Editfoto usage helpers ──────────────────────────────
+def load_editfoto_usage():  return load_json(EDITFOTO_FILE, default={})
+def save_editfoto_usage(d): save_json(EDITFOTO_FILE, d)
+
+def can_use_editfoto(uid: str) -> bool:
+    """Return True jika user belum pakai !editfoto hari ini."""
+    today = datetime.datetime.now(WIB).strftime("%Y-%m-%d")
+    data  = load_editfoto_usage()
+    return data.get(str(uid), {}).get("date") != today
+
+def consume_editfoto(uid: str):
+    """Tandai user sudah pakai !editfoto hari ini."""
+    today = datetime.datetime.now(WIB).strftime("%Y-%m-%d")
+    data  = load_editfoto_usage()
+    data[str(uid)] = {"date": today}
+    save_editfoto_usage(data)
 
 def load_quotes():
     q = load_json(QUOTE_FILE, default=[])
@@ -1113,6 +1178,9 @@ async def on_message(message):
     new_level        = get_level(data[uid]["xp"])
     data[uid]["level"] = new_level
     save_data(data)
+
+    # ── Tracking total pesan (akumulasi semua waktu) ──
+    increment_msg_count(uid)
     if new_level > old_level:
         banner_data = assign_banner(message.author.id, new_level)
         embed = discord.Embed(
@@ -6549,8 +6617,10 @@ async def userinfo_cmd(ctx, member: discord.Member = None):
     # Kapan akun Discord dibuat
     created_str = f"<t:{int(member.created_at.timestamp())}:F> (<t:{int(member.created_at.timestamp())}:R>)"
 
-    # Estimasi jumlah pesan dari XP (setiap pesan = 10 XP)
-    est_messages = xp // XP_PER_MESSAGE
+    # Jumlah pesan nyata dari tracking (akumulasi sejak fitur aktif)
+    real_messages = get_msg_count(uid)
+    # Fallback estimasi dari XP jika data tracking belum ada
+    est_messages = real_messages if real_messages > 0 else (xp // XP_PER_MESSAGE)
 
     # Warn count
     warns = load_warns()
@@ -6578,7 +6648,7 @@ async def userinfo_cmd(ctx, member: discord.Member = None):
     embed.add_field(name="🏷️ Username",       value=f"{member} (`{member.id}`)", inline=False)
     embed.add_field(name="📅 Bergabung Server",value=join_str, inline=False)
     embed.add_field(name="🗓️ Akun Dibuat",     value=created_str, inline=False)
-    embed.add_field(name="💬 Estimasi Pesan",  value=f"**{est_messages:,}** pesan", inline=True)
+    embed.add_field(name="💬 Total Pesan",       value=f"**{est_messages:,}** pesan", inline=True)
     embed.add_field(name="⭐ Level",            value=f"**{level}** — {level_name}", inline=True)
     embed.add_field(name="🔮 XP",              value=f"**{xp:,}** XP", inline=True)
     embed.add_field(name="💰 Saldo Bcash",     value=f"**{saldo:,}** Bcash", inline=True)
@@ -6962,5 +7032,259 @@ async def music_nowplaying(ctx):
 # ═══════════════════════════════════════════════════════
 #  UPDATE HELP — tambah info fitur baru ke !helpadmin
 # ═══════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════
+#  COMMAND !chat — Chat dengan AI (Gemini)
+# ═══════════════════════════════════════════════════════
+
+@bot.command(name="chat", aliases=["ai", "tanya"])
+async def chat_ai_cmd(ctx, *, pesan: str = None):
+    """Chat dengan AI. Limit 10x per hari per user. Format: !chat <pertanyaan>"""
+    if pesan is None:
+        embed = discord.Embed(
+            title="🤖 Chat AI — Asisten Lurah BFL",
+            description=(
+                "Gunakan `!chat <pertanyaan>` untuk bertanya ke AI.\n\n"
+                "**Contoh:**\n"
+                "`!chat apa itu blockchain?`\n"
+                "`!chat buatkan caption instagram yang menarik`\n\n"
+                f"⚠️ Setiap user dibatasi **{AI_CHAT_DAILY_LIMIT}x per hari**."
+            ),
+            color=discord.Color.blurple()
+        )
+        embed.set_footer(text="Asisten Lurah BFL • AI Chat")
+        return await ctx.send(embed=embed)
+
+    if not GEMINI_API_KEY:
+        return await ctx.send(
+            "❌ Fitur AI belum dikonfigurasi. Hubungi admin untuk mengatur `GEMINI_API_KEY`.",
+            delete_after=10
+        )
+
+    uid = str(ctx.author.id)
+    sisa = get_ai_chat_remaining(uid)
+
+    if sisa <= 0:
+        reset_time = (datetime.datetime.now(WIB) + datetime.timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        embed = discord.Embed(
+            title="⛔ Kuota Harian Habis",
+            description=(
+                f"{ctx.author.mention} Kuota **!chat** kamu hari ini sudah habis ({AI_CHAT_DAILY_LIMIT}/{AI_CHAT_DAILY_LIMIT}).\n\n"
+                f"🕛 Reset kuota: <t:{int(reset_time.timestamp())}:R>"
+            ),
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Asisten Lurah BFL • AI Chat")
+        return await ctx.send(embed=embed)
+
+    consume_ai_chat(uid)
+    sisa_baru = sisa - 1
+
+    async with ctx.typing():
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel(
+                model_name="gemini-1.5-flash",
+                system_instruction=(
+                    "Kamu adalah Asisten Lurah BFL, asisten AI dari server Discord BFL (Boyolali Football League). "
+                    "Kamu ramah, santai, dan menggunakan bahasa Indonesia yang natural. "
+                    "Jawab dengan ringkas dan jelas. Gunakan emoji seperlunya agar lebih ekspresif."
+                )
+            )
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: model.generate_content(pesan)
+            )
+            jawaban = response.text
+
+            if len(jawaban) > 3900:
+                jawaban = jawaban[:3900] + "\n\n*...jawaban terpotong karena terlalu panjang.*"
+
+            embed = discord.Embed(
+                title="🤖 AI Menjawab",
+                color=discord.Color.blurple(),
+                timestamp=datetime.datetime.utcnow()
+            )
+            embed.add_field(name=f"❓ {ctx.author.display_name} bertanya:", value=f"> {pesan[:200]}", inline=False)
+            embed.add_field(name="💬 Jawaban:", value=jawaban, inline=False)
+            embed.set_footer(
+                text=f"Asisten Lurah BFL • AI Chat (Gemini) | Sisa kuota hari ini: {sisa_baru}/{AI_CHAT_DAILY_LIMIT}",
+                icon_url=ctx.author.display_avatar.url
+            )
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            await ctx.send(f"❌ Terjadi error saat menghubungi AI: `{e}`", delete_after=15)
+
+
+
+# ═══════════════════════════════════════════════════════
+#  COMMAND !editfoto — Edit foto dengan AI Gemini (1x/hari)
+# ═══════════════════════════════════════════════════════
+
+@bot.command(name="editfoto", aliases=["editphoto", "foto"])
+async def editfoto_cmd(ctx, *, instruksi: str = None):
+    """Edit foto dengan AI Gemini. Limit 1x per hari. Format: !editfoto <instruksi> (sertakan foto sebagai attachment)"""
+    if instruksi is None and not ctx.message.attachments:
+        embed = discord.Embed(
+            title="🖼️ Edit Foto AI — Asisten Lurah BFL",
+            description=(
+                "Kirim foto + instruksi edit menggunakan perintah ini.\n\n"
+                "**Format:**\n"
+                "`!editfoto <instruksi>` (sertakan 1 foto sebagai attachment)\n\n"
+                "**Contoh:**\n"
+                "`!editfoto buat jadi hitam putih dan tambahkan efek vintage`\n"
+                "`!editfoto tulis nama 'BFL' di pojok kanan bawah`\n\n"
+                "⚠️ Setiap user dibatasi **1x per hari**."
+            ),
+            color=discord.Color.purple()
+        )
+        embed.set_footer(text="Asisten Lurah BFL • Edit Foto AI")
+        return await ctx.send(embed=embed)
+
+    if not GEMINI_API_KEY:
+        return await ctx.send(
+            "❌ Fitur AI belum dikonfigurasi. Hubungi admin untuk mengatur `GEMINI_API_KEY`.",
+            delete_after=10
+        )
+
+    # Cek attachment foto
+    foto = None
+    for att in ctx.message.attachments:
+        if att.content_type and att.content_type.startswith("image"):
+            foto = att
+            break
+
+    if foto is None:
+        return await ctx.send(
+            "❌ Tidak ada foto yang dilampirkan. Kirim foto bersamaan dengan perintah `!editfoto`.",
+            delete_after=10
+        )
+
+    uid = str(ctx.author.id)
+
+    # Cek limit harian
+    if not can_use_editfoto(uid):
+        reset_time = (datetime.datetime.now(WIB) + datetime.timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        embed = discord.Embed(
+            title="⛔ Kuota Harian Habis",
+            description=(
+                f"{ctx.author.mention} Kamu sudah menggunakan **!editfoto** hari ini.\n\n"
+                f"🕛 Bisa digunakan lagi: <t:{int(reset_time.timestamp())}:R>"
+            ),
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Asisten Lurah BFL • Edit Foto AI")
+        return await ctx.send(embed=embed)
+
+    consume_editfoto(uid)
+
+    async with ctx.typing():
+        try:
+            # Download foto
+            img_bytes = await foto.read()
+            pil_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+
+            # Simpan ke buffer untuk dikirim ke Gemini
+            buf_in = io.BytesIO()
+            pil_image.save(buf_in, format="JPEG")
+            buf_in.seek(0)
+
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel("gemini-1.5-flash")
+
+            # Upload gambar ke Gemini menggunakan inline data
+            import base64
+            img_b64 = base64.b64encode(buf_in.read()).decode("utf-8")
+
+            prompt_text = (
+                f"Kamu adalah editor foto profesional. "
+                f"Analisis foto yang diberikan, lalu jelaskan secara detail apa yang kamu lakukan untuk memenuhi instruksi berikut: '{instruksi}'. "
+                f"Kemudian, berikan deskripsi lengkap hasil edit yang sudah diterapkan. "
+                f"Jika instruksi tidak bisa diterapkan langsung karena keterbatasan output teks, "
+                f"berikan panduan langkah demi langkah cara melakukannya dengan tool seperti Photoshop, GIMP, atau Canva."
+            )
+
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: model.generate_content([
+                    {"mime_type": "image/jpeg", "data": img_b64},
+                    prompt_text
+                ])
+            )
+
+            hasil = response.text
+            if len(hasil) > 3900:
+                hasil = hasil[:3900] + "\n\n*...deskripsi terpotong karena terlalu panjang.*"
+
+            embed = discord.Embed(
+                title="🖼️ Hasil Analisis Edit Foto",
+                color=discord.Color.purple(),
+                timestamp=datetime.datetime.utcnow()
+            )
+            embed.add_field(name="📝 Instruksi:", value=f"> {instruksi[:200]}", inline=False)
+            embed.add_field(name="🤖 Respons AI:", value=hasil, inline=False)
+            embed.set_thumbnail(url=foto.url)
+            embed.set_footer(
+                text="Asisten Lurah BFL • Edit Foto AI (Gemini) | Kuota: 1x/hari",
+                icon_url=ctx.author.display_avatar.url
+            )
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            await ctx.send(f"❌ Terjadi error saat memproses foto: `{e}`", delete_after=15)
+
+
+# ═══════════════════════════════════════════════════════
+#  COMMAND !quotelist — Lihat daftar quote berdasarkan nomor
+# ═══════════════════════════════════════════════════════
+
+@bot.command(name="quotelist", aliases=["daftarquote", "listquote"])
+async def quotelist_cmd(ctx, nomor: int = None):
+    """Tampilkan quote berdasarkan nomor. Format: !quotelist <nomor> atau !quotelist untuk daftar semua."""
+    quotes = load_quotes()
+    total  = len(quotes)
+
+    if nomor is None:
+        # Tampilkan daftar semua quote (paginated per 20)
+        lines = [f"`{i+1}.` {q[:80]}{'...' if len(q) > 80 else ''}" for i, q in enumerate(quotes)]
+        chunks = [lines[i:i+20] for i in range(0, len(lines), 20)]
+
+        embed = discord.Embed(
+            title=f"📜 Daftar Quote BFL — Total {total} Quote",
+            description="\n".join(chunks[0]),
+            color=discord.Color.gold()
+        )
+        embed.set_footer(text=f"Halaman 1/{len(chunks)} • Gunakan !quotelist <nomor> untuk lihat quote penuh")
+        await ctx.send(embed=embed)
+
+        if len(chunks) > 1:
+            await ctx.send(
+                f"📄 Ada {len(chunks)} halaman. Ketik `!quotelist <nomor>` untuk melihat quote tertentu.",
+                delete_after=15
+            )
+        return
+
+    # Tampilkan quote spesifik berdasarkan nomor
+    if nomor < 1 or nomor > total:
+        return await ctx.send(
+            f"❌ Nomor quote tidak valid. Masukkan angka antara **1** sampai **{total}**.",
+            delete_after=10
+        )
+
+    quote = quotes[nomor - 1]
+    embed = discord.Embed(
+        title=f"💬 Quote #{nomor}",
+        description=f"*\"{quote}\"*",
+        color=discord.Color.gold(),
+        timestamp=datetime.datetime.utcnow()
+    )
+    embed.set_footer(text=f"Asisten Lurah BFL • Quote {nomor}/{total} | !quotelist untuk semua quote")
+    await ctx.send(embed=embed)
+
 
 bot.run(TOKEN)
