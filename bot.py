@@ -2871,27 +2871,27 @@ async def giverole_cmd(ctx, member: discord.Member = None, *, roles_input: str =
 
 
 # ── !removerole ────────────────────────────────────────
-@bot.command(name="removerole", aliases=["cabutrole", "delrole"])
+@bot.command(name="cabutrole", aliases=["delrole"])
 @commands.guild_only()
-async def removerole_cmd(ctx, member: discord.Member = None, *, roles_input: str = None):
+async def cabutrole_cmd(ctx, member: discord.Member = None, *, roles_input: str = None):
     """Admin: cabut satu atau lebih role dari user.
-    Format  : !removerole @user @role1 @role2 ...
-    Contoh  : !removerole @Budi @VIP @Trusted
+    Format  : !cabutrole @user @role1 @role2 ...
+    Contoh  : !cabutrole @Budi @VIP @Trusted
     """
     if not is_admin(ctx.author):
         return await ctx.send("❌ Hanya admin yang bisa menggunakan command ini.", delete_after=5)
 
     if member is None or roles_input is None:
         embed = discord.Embed(
-            title="📖 Cara Pakai — !removerole",
+            title="📖 Cara Pakai — !cabutrole",
             description=(
                 "Cabut satu atau beberapa role dari member sekaligus.\n\n"
                 "**Format:**\n"
-                "`!removerole @user @role1 @role2 ...`\n\n"
+                "`!cabutrole @user @role1 @role2 ...`\n\n"
                 "**Contoh:**\n"
-                "`!removerole @Budi @VIP`\n"
-                "`!removerole @Budi @VIP @Trusted`\n\n"
-                "**Alias:** `!cabutrole` `!delrole`"
+                "`!cabutrole @Budi @VIP`\n"
+                "`!cabutrole @Budi @VIP @Trusted`\n\n"
+                "**Alias:** `!delrole`"
             ),
             color=discord.Color.red()
         )
