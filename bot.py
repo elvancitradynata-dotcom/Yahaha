@@ -882,7 +882,7 @@ def build_giveaway_embed(gw: dict) -> discord.Embed:
 async def on_ready():
     print(f"✅ {bot.user} online!")
     await bot.change_presence(
-        activity=discord.Activity(type=discord.ActivityType.watching, name="WATCHING SERVER 24/7")
+        activity=discord.Activity(type=discord.ActivityType.watching, name="Desa BFL 🏘️")
     )
     bot.add_view(TicketView())
     tickets = load_tickets()
@@ -2774,7 +2774,7 @@ def _build_role_embed(role: discord.Role, action: str, member: discord.Member,
     return embed
 
 # ── !giverole ──────────────────────────────────────────
-@bot.command(name="giverole", aliases=["addrole", "berirole"])
+@bot.command(name="giverole", aliases=["berirole"])
 @commands.guild_only()
 async def giverole_cmd(ctx, member: discord.Member = None, *, roles_input: str = None):
     """Admin: beri satu atau lebih role ke user.
@@ -2794,7 +2794,7 @@ async def giverole_cmd(ctx, member: discord.Member = None, *, roles_input: str =
                 "**Contoh:**\n"
                 "`!giverole @Budi @Member`\n"
                 "`!giverole @Budi @Member @VIP @Trusted`\n\n"
-                "**Alias:** `!addrole` `!berirole`"
+                "**Alias:** `!berirole`"
             ),
             color=discord.Color.blue()
         )
