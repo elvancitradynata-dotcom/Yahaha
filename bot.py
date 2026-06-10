@@ -1892,7 +1892,7 @@ RARITY_EMOJI = {
     "Legendary": "🌟",
 }
 
-GACHA_TICKET_CD_HOURS = 12   # Cooldown claim tiket gratis
+GACHA_TICKET_CD_HOURS = 24   # Cooldown claim tiket gratis
 COMMON_TO_TICKET      = 5    # Jumlah kartu Common untuk tukar 1 tiket
 GACHA_IDR_PRICE       = 1000 # Harga !gachaidr (1x pull = 4 kartu)
 GACHA_IDR_CARDS       = 4    # Kartu yang didapat per !gachaidr
