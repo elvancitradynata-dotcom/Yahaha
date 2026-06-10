@@ -2589,155 +2589,39 @@ async def userinfo_cmd(ctx, member: discord.Member = None):
     member = member or ctx.author
     uid    = str(member.id)
 
-    # ── Data pesan tercatat (sejak bot aktif) ──
-    xp_data      = load_data()
-    user_data    = xp_data.get(uid, {})
-    msg_count    = user_data.get("message_count", 0)
+    # Pesan tercatat
+    xp_data   = load_data()
+    msg_count = xp_data.get(uid, {}).get("message_count", 0)
 
-    # ── Waktu join server ──
+    # Join server
     jt_data = load_join_tracking()
     if uid in jt_data:
         try:
             join_dt  = datetime.datetime.fromisoformat(jt_data[uid])
-            join_str = f"<t:{int(join_dt.timestamp())}:F>\n╰ <t:{int(join_dt.timestamp())}:R>"
+            join_str = f"<t:{int(join_dt.timestamp())}:F>"
         except Exception:
             join_str = "Tidak diketahui"
     elif member.joined_at:
-        join_dt  = member.joined_at
-        join_str = f"<t:{int(join_dt.timestamp())}:F>\n╰ <t:{int(join_dt.timestamp())}:R>"
+        join_str = f"<t:{int(member.joined_at.timestamp())}:F>"
     else:
         join_str = "Tidak diketahui"
 
-    # ── Akun Discord dibuat ──
-    created_ts  = int(member.created_at.timestamp())
-    created_str = f"<t:{created_ts}:F>\n╰ <t:{created_ts}:R>"
+    created_str = f"<t:{int(member.created_at.timestamp())}:F>"
 
-    # ── Status & aktivitas ──
-    status_map = {
-        discord.Status.online:    ("🟢", "Online"),
-        discord.Status.idle:      ("🌙", "Idle"),
-        discord.Status.dnd:       ("🔴", "Do Not Disturb"),
-        discord.Status.offline:   ("⚫", "Offline"),
-    }
-    status_icon, status_text = status_map.get(member.status, ("⚫", "Offline"))
+    top_color   = member.top_role.color
+    color       = top_color if top_color != discord.Color.default() else discord.Color.from_rgb(88, 101, 242)
 
-    # Aktivitas (game/streaming/custom status)
-    activity_str = "—"
-    if member.activities:
-        for act in member.activities:
-            if isinstance(act, discord.Game):
-                activity_str = f"🎮 Bermain **{act.name}**"
-                break
-            elif isinstance(act, discord.Streaming):
-                activity_str = f"📺 Streaming **{act.name}**"
-                break
-            elif isinstance(act, discord.CustomActivity) and act.name:
-                activity_str = f"💬 {act.name}"
-                break
-            elif isinstance(act, discord.Activity):
-                activity_str = f"🎯 {act.name}"
-                break
-
-    # ── Boost status ──
-    if member.premium_since:
-        boost_ts   = int(member.premium_since.timestamp())
-        boost_str  = f"✅ Sejak <t:{boost_ts}:D>"
-    else:
-        boost_str  = "❌ Tidak"
-
-    # ── Nickname ──
-    nick_str = f"`{member.nick}`" if member.nick else "*(tidak ada)*"
-
-    # ── Hitung lama di server ──
-    if member.joined_at:
-        delta     = datetime.datetime.now(datetime.timezone.utc) - member.joined_at
-        days      = delta.days
-        lama_str  = f"**{days:,}** hari"
-    else:
-        lama_str  = "—"
-
-    # ── Warna embed: berdasarkan top role ──
-    top_role_color = member.top_role.color
-    embed_color    = top_role_color if top_role_color != discord.Color.default() else discord.Color.from_rgb(88, 101, 242)
-
-    # ══════════════════════════════════════
-    #  BUILD EMBED
-    # ══════════════════════════════════════
-    embed = discord.Embed(
-        description=(
-            f"### <@{member.id}>\n"
-            f"**`{member}`** — {member.id}"
-        ),
-        color=embed_color,
-        timestamp=datetime.datetime.utcnow()
-    )
-    embed.set_author(
-        name="User Information",
-        icon_url=member.display_avatar.url
-    )
+    embed = discord.Embed(color=color, timestamp=datetime.datetime.utcnow())
+    embed.set_author(name=str(member), icon_url=member.display_avatar.url)
     embed.set_thumbnail(url=member.display_avatar.url)
-
-    # ── Row 1: Tanggal ──
-    embed.add_field(
-        name="📅 Bergabung Server",
-        value=join_str,
-        inline=True
-    )
-    embed.add_field(
-        name="🗓️ Akun Dibuat",
-        value=created_str,
-        inline=True
-    )
-    embed.add_field(
-        name="⏳ Lama di Server",
-        value=lama_str,
-        inline=True
-    )
-
-    # ── Divider ──
-    embed.add_field(name="", value="╌" * 32, inline=False)
-
-    # ── Row 2: Aktivitas ──
-    embed.add_field(
-        name=f"{status_icon} Status",
-        value=f"**{status_text}**",
-        inline=True
-    )
-    embed.add_field(
-        name="🎯 Aktivitas",
-        value=activity_str,
-        inline=True
-    )
-    embed.add_field(
-        name="💬 Total Chat Tercatat",
-        value=f"**{msg_count:,}** pesan",
-        inline=True
-    )
-
-    # ── Divider ──
-    embed.add_field(name="", value="╌" * 32, inline=False)
-
-    # ── Row 3: Profil ──
-    embed.add_field(
-        name="🏷️ Nickname",
-        value=nick_str,
-        inline=True
-    )
-    embed.add_field(
-        name="💎 Server Boost",
-        value=boost_str,
-        inline=True
-    )
-    embed.add_field(
-        name="🤖 Bot?",
-        value="✅ Ya" if member.bot else "❌ Bukan",
-        inline=True
-    )
-
-    embed.set_footer(
-        text=f"Diminta oleh {ctx.author.display_name}  •  ID: {member.id}",
-        icon_url=ctx.author.display_avatar.url
-    )
+    embed.add_field(name="🆔 ID",               value=f"`{member.id}`",          inline=True)
+    embed.add_field(name="💬 Total Chat",        value=f"**{msg_count:,}** pesan", inline=True)
+    embed.add_field(name="\u200b",               value="\u200b",                  inline=True)
+    embed.add_field(name="📅 Bergabung Server",  value=join_str,                  inline=True)
+    embed.add_field(name="🗓️ Akun Dibuat",       value=created_str,               inline=True)
+    embed.add_field(name="\u200b",               value="\u200b",                  inline=True)
+    embed.set_footer(text=f"Diminta oleh {ctx.author.display_name}",
+                     icon_url=ctx.author.display_avatar.url)
     await ctx.send(embed=embed)
 
 
@@ -3055,6 +2939,1221 @@ async def listrole_cmd(ctx):
         )
         await ctx.send(embed=embed)
 
+
+# ═══════════════════════════════════════════════════════
+#  GACHA SYSTEM — Pokemon Lootbox
+# ═══════════════════════════════════════════════════════
+
+# ── File constants ──
+GACHA_FILE      = "gacha.json"
+INVENTORY_FILE  = "inventory.json"
+WITHDRAW_FILE   = "withdraw.json"
+POKEMON_DIR     = "pokemon_images"
+
+GACHA_COOLDOWN_HOURS = 12
+GACHA_IDR_CHANCE     = 35      # % dapat uang
+GACHA_IDR_MIN        = 200
+GACHA_IDR_MAX        = 1000
+WITHDRAW_MIN         = 15000   # minimum withdraw Rp15.000
+
+# ── Daftar Pokemon per rarity ──
+POKEMON_ITEMS = {
+    "Common": {
+        "chance": 35,
+        "sell_price": 0,
+        "color": 0x9E9E9E,
+        "emoji": "⚪",
+        "pokemons": ["Rattata","Pidgey","Caterpie","Weedle","Magikarp",
+                     "Zubat","Geodude","Tentacool","Seel","Drowzee"]
+    },
+    "Uncommon": {
+        "chance": 20,
+        "sell_price": 200,
+        "color": 0x4CAF50,
+        "emoji": "🟢",
+        "pokemons": ["Bulbasaur","Charmander","Squirtle","Pikachu","Eevee",
+                     "Growlithe","Slowpoke","Machop","Gastly","Abra"]
+    },
+    "Rare": {
+        "chance": 7,
+        "sell_price": 500,
+        "color": 0x2196F3,
+        "emoji": "🔵",
+        "pokemons": ["Lapras","Snorlax","Scyther","Electabuzz","Magmar",
+                     "Jolteon","Flareon","Vaporeon","Alakazam","Gengar"]
+    },
+    "Epic": {
+        "chance": 3,
+        "sell_price": 1000,
+        "color": 0x9C27B0,
+        "emoji": "🟣",
+        "pokemons": ["Dragonite","Gyarados","Arcanine","Rhydon","Nidoking",
+                     "Machamp","Golem","Exeggutor","Starmie","Clefable"]
+    },
+    "Legendary": {
+        "chance": 5,
+        "sell_price": 2000,
+        "color": 0xFFD700,
+        "emoji": "⭐",
+        "pokemons": ["Mewtwo","Mew","Articuno","Zapdos","Moltres",
+                     "Lugia","Ho-Oh","Celebi","Rayquaza","Arceus"]
+    },
+}
+# Total item chance = 70% (sisanya 30% = IDR 200-1000, ditambah 5% IDR rare)
+# Kita pakai logika: roll 0-99, <35 = IDR, >=35 = item pokemon
+
+# ── Helper Gacha ──
+def load_gacha():    return load_json(GACHA_FILE, default={})
+def save_gacha(d):   save_json(GACHA_FILE, d)
+def load_inventory(): return load_json(INVENTORY_FILE, default={})
+def save_inventory(d): save_json(INVENTORY_FILE, d)
+def load_withdraw(): return load_json(WITHDRAW_FILE, default=[])
+def save_withdraw(d): save_json(WITHDRAW_FILE, d)
+
+def get_user_gacha(uid: str) -> dict:
+    data = load_gacha()
+    if uid not in data:
+        data[uid] = {"saldo": 0, "last_gacha": None, "total_gacha": 0}
+        save_gacha(data)
+    return data[uid]
+
+def gacha_cooldown_remaining(uid: str):
+    """Return sisa detik cooldown, 0 jika sudah bisa gacha."""
+    d = get_user_gacha(uid)
+    if not d["last_gacha"]:
+        return 0
+    last = datetime.datetime.fromisoformat(d["last_gacha"])
+    elapsed = (datetime.datetime.utcnow() - last).total_seconds()
+    remaining = (GACHA_COOLDOWN_HOURS * 3600) - elapsed
+    return max(0, remaining)
+
+def roll_gacha() -> dict:
+    """Roll satu gacha, return dict result."""
+    roll = random.randint(1, 100)
+
+    # 35% dapat IDR
+    if roll <= GACHA_IDR_CHANCE:
+        amount = random.randint(GACHA_IDR_MIN, GACHA_IDR_MAX)
+        return {"type": "idr", "amount": amount}
+
+    # 65% dapat Pokemon item — weighted random per rarity
+    pool = []
+    for rarity, info in POKEMON_ITEMS.items():
+        pool.extend([rarity] * info["chance"])
+    rarity = random.choice(pool)
+    pokemon = random.choice(POKEMON_ITEMS[rarity]["pokemons"])
+    return {
+        "type": "item",
+        "rarity": rarity,
+        "pokemon": pokemon,
+        "sell_price": POKEMON_ITEMS[rarity]["sell_price"],
+        "color": POKEMON_ITEMS[rarity]["color"],
+        "emoji": POKEMON_ITEMS[rarity]["emoji"],
+    }
+
+def add_item_to_inventory(uid: str, pokemon: str, rarity: str):
+    inv = load_inventory()
+    if uid not in inv:
+        inv[uid] = []
+    inv[uid].append({
+        "pokemon": pokemon,
+        "rarity": rarity,
+        "sell_price": POKEMON_ITEMS[rarity]["sell_price"],
+        "obtained": datetime.datetime.utcnow().isoformat()
+    })
+    save_inventory(inv)
+
+def get_pokemon_image(pokemon: str):
+    """Return path gambar pokemon jika ada, else None."""
+    os.makedirs(POKEMON_DIR, exist_ok=True)
+    for ext in ["png","jpg","jpeg","gif"]:
+        path = os.path.join(POKEMON_DIR, f"{pokemon.lower()}.{ext}")
+        if os.path.exists(path):
+            return path
+    return None
+
+
+# ══════════════════════════════════════════════════════
+#  !gacha — Roll lootbox
+# ══════════════════════════════════════════════════════
+@bot.command(name="gacha")
+@commands.guild_only()
+async def gacha_cmd(ctx):
+    """Roll gacha lootbox Pokemon (12 jam sekali)."""
+    uid = str(ctx.author.id)
+    sisa = gacha_cooldown_remaining(uid)
+
+    if sisa > 0:
+        jam  = int(sisa // 3600)
+        mnt  = int((sisa % 3600) // 60)
+        dtk  = int(sisa % 60)
+        embed = discord.Embed(
+            title="⏳ Gacha Masih Cooldown",
+            description=f"Kamu bisa gacha lagi dalam **{jam}j {mnt}m {dtk}d**.",
+            color=discord.Color.orange()
+        )
+        embed.set_footer(text="Gacha tersedia setiap 12 jam sekali.")
+        return await ctx.send(embed=embed)
+
+    result = roll_gacha()
+
+    # Update data
+    gacha_data = load_gacha()
+    if uid not in gacha_data:
+        gacha_data[uid] = {"saldo": 0, "last_gacha": None, "total_gacha": 0}
+    gacha_data[uid]["last_gacha"]   = datetime.datetime.utcnow().isoformat()
+    gacha_data[uid]["total_gacha"] += 1
+
+    if result["type"] == "idr":
+        gacha_data[uid]["saldo"] = gacha_data[uid].get("saldo", 0) + result["amount"]
+        save_gacha(gacha_data)
+
+        embed = discord.Embed(
+            title="🎰 Gacha Lootbox!",
+            description=(
+                f"✨ Selamat **{ctx.author.display_name}**!\n\n"
+                f"💰 Kamu mendapat **Rp{result['amount']:,}** IDR virtual!"
+            ),
+            color=discord.Color.gold()
+        )
+        embed.add_field(name="💳 Saldo Kamu",
+                        value=f"Rp{gacha_data[uid]['saldo']:,}", inline=True)
+        embed.add_field(name="🎲 Total Gacha",
+                        value=str(gacha_data[uid]["total_gacha"]), inline=True)
+        embed.set_thumbnail(url=ctx.author.display_avatar.url)
+        embed.set_footer(text="Gacha berikutnya tersedia 12 jam lagi.")
+        return await ctx.send(embed=embed)
+
+    # Item Pokemon
+    rarity  = result["rarity"]
+    pokemon = result["pokemon"]
+    add_item_to_inventory(uid, pokemon, rarity)
+    save_gacha(gacha_data)
+
+    info    = POKEMON_ITEMS[rarity]
+    embed   = discord.Embed(
+        title="🎰 Gacha Lootbox!",
+        description=(
+            f"{info['emoji']} **{rarity} Pokemon!**\n\n"
+            f"🐾 Kamu mendapat **{pokemon}**!\n"
+            f"💵 Bisa dijual seharga **Rp{info['sell_price']:,}**"
+            if info["sell_price"] > 0 else
+            f"🐾 Kamu mendapat **{pokemon}**!\n"
+            f"*(item ini tidak bisa dijual)*"
+        ),
+        color=info["color"]
+    )
+    embed.add_field(name="✨ Rarity",    value=f"{info['emoji']} {rarity}", inline=True)
+    embed.add_field(name="🎲 Total Gacha", value=str(gacha_data[uid]["total_gacha"]), inline=True)
+    embed.set_footer(text="Gacha berikutnya tersedia 12 jam lagi.")
+
+    # Cek gambar pokemon
+    img_path = get_pokemon_image(pokemon)
+    if img_path:
+        file = discord.File(img_path, filename=f"{pokemon.lower()}.png")
+        embed.set_image(url=f"attachment://{pokemon.lower()}.png")
+        return await ctx.send(embed=embed, file=file)
+
+    await ctx.send(embed=embed)
+
+
+# ══════════════════════════════════════════════════════
+#  !inventory — Lihat inventori pokemon
+# ══════════════════════════════════════════════════════
+@bot.command(name="inventory", aliases=["inv", "bag"])
+@commands.guild_only()
+async def inventory_cmd(ctx, member: discord.Member = None):
+    """Lihat inventori Pokemon kamu atau member lain."""
+    target = member or ctx.author
+    uid    = str(target.id)
+
+    inv    = load_inventory()
+    items  = inv.get(uid, [])
+
+    gacha_data = load_gacha()
+    saldo = gacha_data.get(uid, {}).get("saldo", 0)
+
+    embed = discord.Embed(
+        title=f"🎒 Inventori — {target.display_name}",
+        color=discord.Color.from_rgb(88, 101, 242),
+        timestamp=datetime.datetime.utcnow()
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.add_field(name="💳 Saldo IDR Virtual",
+                    value=f"Rp{saldo:,}", inline=False)
+
+    if not items:
+        embed.add_field(name="🎒 Item Pokemon",
+                        value="*Belum punya item. Lakukan `!gacha` untuk mendapatkan item!*",
+                        inline=False)
+    else:
+        # Kelompokkan per rarity
+        grouped = {}
+        for item in items:
+            r = item["rarity"]
+            grouped.setdefault(r, [])
+            grouped[r].append(item["pokemon"])
+
+        rarity_order = ["Legendary","Epic","Rare","Uncommon","Common"]
+        for r in rarity_order:
+            if r not in grouped:
+                continue
+            info  = POKEMON_ITEMS[r]
+            names = grouped[r]
+            # Hitung duplikat
+            counter = {}
+            for p in names:
+                counter[p] = counter.get(p, 0) + 1
+            display = ", ".join(
+                f"{p} x{c}" if c > 1 else p
+                for p, c in counter.items()
+            )
+            embed.add_field(
+                name=f"{info['emoji']} {r} ({len(names)} item) — Jual @ Rp{info['sell_price']:,}",
+                value=display[:500],
+                inline=False
+            )
+
+    embed.add_field(
+        name="📌 Command",
+        value="`!sell <nama_pokemon>` — Jual item\n`!withdraw <jumlah>` — Tarik saldo (min Rp15.000)",
+        inline=False
+    )
+    embed.set_footer(text=f"Total item: {len(items)}")
+    await ctx.send(embed=embed)
+
+
+# ══════════════════════════════════════════════════════
+#  !tipgacha — Info peluang gacha
+# ══════════════════════════════════════════════════════
+@bot.command(name="tipgacha", aliases=["infogacha", "rategacha"])
+@commands.guild_only()
+async def tipgacha_cmd(ctx):
+    """Lihat peluang dan info sistem gacha."""
+    embed = discord.Embed(
+        title="🎰 Info Sistem Gacha",
+        description=(
+            "Setiap **12 jam** kamu bisa roll satu **Lootbox Pokemon**!\n"
+            "Hasilnya bisa berupa **IDR virtual** atau **item Pokemon**."
+        ),
+        color=discord.Color.from_rgb(255, 200, 0)
+    )
+    embed.add_field(
+        name="💰 Peluang IDR (35%)",
+        value=f"Dapat **Rp{GACHA_IDR_MIN:,} – Rp{GACHA_IDR_MAX:,}** IDR virtual.",
+        inline=False
+    )
+    embed.add_field(
+        name="🐾 Peluang Item Pokemon (65%)",
+        value=(
+            "⚪ **Common** — 35% — *tidak bisa dijual*\n"
+            "🟢 **Uncommon** — 20% — Jual @ **Rp200**\n"
+            "🔵 **Rare** — 7% — Jual @ **Rp500**\n"
+            "🟣 **Epic** — 3% — Jual @ **Rp1.000**\n"
+            "⭐ **Legendary** — 5% — Jual @ **Rp2.000**"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="📌 Command",
+        value=(
+            "`!gacha` — Roll lootbox\n"
+            "`!inventory` — Lihat item & saldo\n"
+            "`!sell <pokemon>` — Jual item ke IDR\n"
+            "`!withdraw <jumlah>` — Tarik saldo (min Rp15.000)\n"
+            "`!claim` — Cek saldo & status cooldown"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="Gacha tersedia setiap 12 jam sekali.")
+    await ctx.send(embed=embed)
+
+
+# ══════════════════════════════════════════════════════
+#  !claim — Cek saldo & status cooldown
+# ══════════════════════════════════════════════════════
+@bot.command(name="claim")
+@commands.guild_only()
+async def claim_cmd(ctx):
+    """Cek saldo IDR virtual dan status cooldown gacha."""
+    uid  = str(ctx.author.id)
+    d    = get_user_gacha(uid)
+    sisa = gacha_cooldown_remaining(uid)
+    inv  = load_inventory()
+    items = inv.get(uid, [])
+
+    if sisa > 0:
+        jam = int(sisa // 3600)
+        mnt = int((sisa % 3600) // 60)
+        status_str = f"⏳ Tersedia dalam **{jam}j {mnt}m** lagi"
+        status_color = discord.Color.orange()
+    else:
+        status_str   = "✅ **Siap di-roll!** Ketik `!gacha`"
+        status_color = discord.Color.green()
+
+    embed = discord.Embed(
+        title=f"📋 Status Gacha — {ctx.author.display_name}",
+        color=status_color,
+        timestamp=datetime.datetime.utcnow()
+    )
+    embed.set_thumbnail(url=ctx.author.display_avatar.url)
+    embed.add_field(name="💳 Saldo IDR",    value=f"Rp{d['saldo']:,}",       inline=True)
+    embed.add_field(name="🎲 Total Gacha",  value=str(d["total_gacha"]),      inline=True)
+    embed.add_field(name="🎒 Total Item",   value=f"{len(items)} item",       inline=True)
+    embed.add_field(name="🎰 Status Gacha", value=status_str,                 inline=False)
+    embed.add_field(
+        name="💡 Tips",
+        value="`!sell <pokemon>` untuk jual item\n`!withdraw <jumlah>` untuk tarik saldo",
+        inline=False
+    )
+    await ctx.send(embed=embed)
+
+
+# ══════════════════════════════════════════════════════
+#  !sell — Jual item pokemon
+# ══════════════════════════════════════════════════════
+@bot.command(name="sell")
+@commands.guild_only()
+async def sell_cmd(ctx, *, pokemon_name: str = None):
+    """Jual item Pokemon dari inventori. Format: !sell <nama>"""
+    if pokemon_name is None:
+        return await ctx.send(
+            "❌ Sebutkan nama Pokemon yang ingin dijual.\n"
+            "Contoh: `!sell Mewtwo`\nLihat item kamu di `!inventory`",
+            delete_after=10
+        )
+
+    uid   = str(ctx.author.id)
+    inv   = load_inventory()
+    items = inv.get(uid, [])
+
+    # Cari item (case-insensitive, ambil yang paling mahal dulu)
+    pokemon_name = pokemon_name.strip()
+    found_idx    = None
+    for i, item in enumerate(items):
+        if item["pokemon"].lower() == pokemon_name.lower():
+            if item["sell_price"] == 0:
+                return await ctx.send(
+                    f"❌ **{item['pokemon']}** ({item['rarity']}) tidak bisa dijual.",
+                    delete_after=8
+                )
+            if found_idx is None or item["sell_price"] > items[found_idx]["sell_price"]:
+                found_idx = i
+
+    if found_idx is None:
+        return await ctx.send(
+            f"❌ **{pokemon_name}** tidak ada di inventorimu.\n"
+            f"Cek inventori dengan `!inventory`",
+            delete_after=10
+        )
+
+    item         = items.pop(found_idx)
+    inv[uid]     = items
+    save_inventory(inv)
+
+    # Tambah saldo
+    gacha_data   = load_gacha()
+    if uid not in gacha_data:
+        gacha_data[uid] = {"saldo": 0, "last_gacha": None, "total_gacha": 0}
+    gacha_data[uid]["saldo"] = gacha_data[uid].get("saldo", 0) + item["sell_price"]
+    save_gacha(gacha_data)
+
+    info  = POKEMON_ITEMS[item["rarity"]]
+    embed = discord.Embed(
+        title="💰 Item Terjual!",
+        description=(
+            f"{info['emoji']} **{item['pokemon']}** ({item['rarity']})\n"
+            f"Terjual seharga **Rp{item['sell_price']:,}** IDR."
+        ),
+        color=discord.Color.green(),
+        timestamp=datetime.datetime.utcnow()
+    )
+    embed.add_field(name="💳 Saldo Sekarang",
+                    value=f"Rp{gacha_data[uid]['saldo']:,}", inline=True)
+    embed.add_field(name="🎒 Sisa Item",
+                    value=f"{len(inv.get(uid,[]))} item", inline=True)
+    embed.set_footer(text=f"Tarik saldo min Rp15.000 dengan !withdraw")
+    await ctx.send(embed=embed)
+
+
+# ══════════════════════════════════════════════════════
+#  !withdraw — Request tarik saldo ke e-wallet
+# ══════════════════════════════════════════════════════
+@bot.command(name="withdraw", aliases=["wd", "tarik"])
+async def withdraw_cmd(ctx, jumlah: int = None):
+    """Request tarik saldo IDR ke e-wallet. Format: !withdraw <jumlah>"""
+    # Hanya bisa dilakukan di DM
+    if not isinstance(ctx.channel, discord.DMChannel):
+        await ctx.message.delete()
+        try:
+            await ctx.author.send(
+                "🔒 Demi keamanan, command `!withdraw` hanya bisa dilakukan di **DM bot** ini.\n"
+                "Silakan ketik `!withdraw` langsung di sini."
+            )
+        except discord.Forbidden:
+            pass
+        return
+    uid = str(ctx.author.id)
+    d   = get_user_gacha(uid)
+
+    if jumlah is None:
+        embed = discord.Embed(
+            title="📖 Cara Withdraw",
+            description=(
+                f"Tarik saldo IDR virtual ke e-wallet kamu.\n\n"
+                f"**Format:** `!withdraw <jumlah>`\n"
+                f"**Contoh:** `!withdraw 15000`\n\n"
+                f"**Minimum:** Rp{WITHDRAW_MIN:,}\n"
+                f"**Saldo kamu:** Rp{d['saldo']:,}\n\n"
+                f"*Request akan diproses admin secara manual.*"
+            ),
+            color=discord.Color.blue()
+        )
+        return await ctx.send(embed=embed, delete_after=20)
+
+    if jumlah < WITHDRAW_MIN:
+        return await ctx.send(
+            f"❌ Minimum withdraw **Rp{WITHDRAW_MIN:,}**.\n"
+            f"Saldo kamu: **Rp{d['saldo']:,}**",
+            delete_after=8
+        )
+
+    if d["saldo"] < jumlah:
+        return await ctx.send(
+            f"❌ Saldo tidak cukup.\n"
+            f"Saldo kamu: **Rp{d['saldo']:,}** | Diminta: **Rp{jumlah:,}**",
+            delete_after=8
+        )
+
+    def check_dm(m):
+        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+    try:
+        await ctx.send(
+            f"💳 **Request Withdraw Rp{jumlah:,}**\n\n"
+            f"Ketik nama & nomor e-walletmu (GoPay/OVO/Dana/BSI/dll).\n"
+            f"Contoh: `GoPay 081234567890`\n\n"
+            f"_(Balas dalam 60 detik, ketik `batal` untuk membatalkan)_"
+        )
+        dm_reply = await bot.wait_for("message", check=check_dm, timeout=60)
+        if dm_reply.content.lower() == "batal":
+            return await ctx.send("❌ Withdraw dibatalkan.")
+        ewallet  = dm_reply.content.strip()
+    except asyncio.TimeoutError:
+        return await ctx.send("❌ Timeout. Request withdraw dibatalkan.")
+
+    # Kurangi saldo
+    gacha_data = load_gacha()
+    gacha_data[uid]["saldo"] -= jumlah
+    save_gacha(gacha_data)
+
+    # Simpan log withdraw
+    wd_log = load_withdraw()
+    wd_log.append({
+        "uid":       uid,
+        "username":  str(ctx.author),
+        "jumlah":    jumlah,
+        "ewallet":   ewallet,
+        "status":    "pending",
+        "time":      datetime.datetime.utcnow().isoformat(),
+        "req_id":    f"WD-{ctx.author.id}-{int(datetime.datetime.utcnow().timestamp())}"
+    })
+    save_withdraw(wd_log)
+    req_id = wd_log[-1]["req_id"]
+
+    # Konfirmasi ke user
+    await ctx.send(
+        f"✅ **Request withdraw diterima!**\n"
+        f"🆔 ID: `{req_id}`\n"
+        f"💰 Jumlah: **Rp{jumlah:,}**\n"
+        f"💳 E-wallet: **{ewallet}**\n\n"
+        f"*Admin akan memproses dalam 1x24 jam.*"
+    )
+
+    # Notif ke admin (OWNER)
+    owner = bot.get_user(OWNER_ID)
+    if owner:
+        admin_embed = discord.Embed(
+            title="💸 Request Withdraw Baru",
+            color=discord.Color.red(),
+            timestamp=datetime.datetime.utcnow()
+        )
+        admin_embed.add_field(name="👤 User",     value=f"{ctx.author} (`{uid}`)", inline=True)
+        admin_embed.add_field(name="💰 Jumlah",   value=f"Rp{jumlah:,}",          inline=True)
+        admin_embed.add_field(name="💳 E-Wallet", value=ewallet,                  inline=True)
+        admin_embed.add_field(name="🆔 Req ID",   value=f"`{req_id}`",            inline=False)
+        admin_embed.set_footer(text="Proses manual — konfirmasi ke user setelah transfer.")
+        try:
+            await owner.send(embed=admin_embed)
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════
+#  ADMIN COMMANDS — Gacha
+# ══════════════════════════════════════════════════════
+
+@bot.command(name="givegacha")
+@commands.guild_only()
+async def givegacha_cmd(ctx, member: discord.Member = None):
+    """Admin: beri 1x gacha bebas (bypass cooldown) ke member."""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+    if member is None:
+        return await ctx.send("❌ Format: `!givegacha @user`", delete_after=8)
+
+    uid  = str(member.id)
+    result = roll_gacha()
+
+    gacha_data = load_gacha()
+    if uid not in gacha_data:
+        gacha_data[uid] = {"saldo": 0, "last_gacha": None, "total_gacha": 0}
+    gacha_data[uid]["total_gacha"] += 1
+
+    if result["type"] == "idr":
+        gacha_data[uid]["saldo"] += result["amount"]
+        save_gacha(gacha_data)
+        desc = f"💰 Mendapat **Rp{result['amount']:,}** IDR dari admin!"
+        color = discord.Color.gold()
+    else:
+        add_item_to_inventory(uid, result["pokemon"], result["rarity"])
+        save_gacha(gacha_data)
+        info = POKEMON_ITEMS[result["rarity"]]
+        desc = f"{info['emoji']} Mendapat **{result['pokemon']}** ({result['rarity']}) dari admin!"
+        color = info["color"]
+
+    embed = discord.Embed(
+        title=f"🎁 Admin Gacha — {member.display_name}",
+        description=desc,
+        color=color,
+        timestamp=datetime.datetime.utcnow()
+    )
+    embed.set_footer(text=f"Diberikan oleh {ctx.author.display_name}")
+    await ctx.send(embed=embed)
+
+    try:
+        await member.send(
+            f"🎁 Kamu mendapat **free gacha** dari admin **{ctx.author.display_name}**!\n{desc}"
+        )
+    except Exception:
+        pass
+
+
+@bot.command(name="addpokemon")
+@commands.guild_only()
+async def addpokemon_cmd(ctx, pokemon_name: str = None):
+    """Admin: upload gambar pokemon ke bot.
+    Format: !addpokemon <nama> (attach gambar)"""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+    if not pokemon_name:
+        return await ctx.send("❌ Format: `!addpokemon <nama>` + attach gambar", delete_after=8)
+    if not ctx.message.attachments:
+        return await ctx.send("❌ Attach gambar Pokemon-nya juga!", delete_after=8)
+
+    att = ctx.message.attachments[0]
+    if not any(att.filename.lower().endswith(ext) for ext in ["png","jpg","jpeg","gif"]):
+        return await ctx.send("❌ Format gambar harus PNG/JPG/GIF.", delete_after=8)
+
+    os.makedirs(POKEMON_DIR, exist_ok=True)
+    ext      = att.filename.split(".")[-1].lower()
+    savepath = os.path.join(POKEMON_DIR, f"{pokemon_name.lower()}.{ext}")
+    await att.save(savepath)
+
+    embed = discord.Embed(
+        title="✅ Gambar Pokemon Disimpan",
+        description=f"Gambar **{pokemon_name}** berhasil diupload!",
+        color=discord.Color.green()
+    )
+    embed.set_image(url=att.url)
+    embed.set_footer(text=f"Disimpan sebagai: {pokemon_name.lower()}.{ext}")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="wdlist")
+@commands.guild_only()
+async def wdlist_cmd(ctx, status_filter: str = "pending"):
+    """Admin: lihat daftar request withdraw. !wdlist [pending/all]"""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+
+    wd_log  = load_withdraw()
+    if status_filter.lower() != "all":
+        wd_log = [w for w in wd_log if w.get("status") == status_filter.lower()]
+
+    if not wd_log:
+        return await ctx.send(f"📭 Tidak ada request withdraw `{status_filter}`.", delete_after=8)
+
+    embed = discord.Embed(
+        title=f"💸 Withdraw Log — {status_filter.upper()}",
+        color=discord.Color.blue(),
+        timestamp=datetime.datetime.utcnow()
+    )
+    for w in wd_log[-10:]:   # tampil 10 terbaru
+        embed.add_field(
+            name=f"`{w['req_id']}` — {w['username']}",
+            value=(
+                f"💰 Rp{w['jumlah']:,} | 💳 {w['ewallet']}\n"
+                f"📅 {w['time'][:16]} | Status: **{w['status']}**"
+            ),
+            inline=False
+        )
+    embed.set_footer(text=f"Total: {len(wd_log)} request | Gunakan !wdselesai <req_id>")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="wdselesai")
+@commands.guild_only()
+async def wdselesai_cmd(ctx, req_id: str = None):
+    """Admin: tandai withdraw sebagai selesai. !wdselesai <req_id>"""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+    if not req_id:
+        return await ctx.send("❌ Format: `!wdselesai <req_id>`", delete_after=8)
+
+    wd_log = load_withdraw()
+    found  = False
+    target_uid = None
+    jumlah = 0
+    for w in wd_log:
+        if w["req_id"] == req_id:
+            w["status"]   = "selesai"
+            w["done_by"]  = str(ctx.author)
+            w["done_at"]  = datetime.datetime.utcnow().isoformat()
+            found         = True
+            target_uid    = w["uid"]
+            jumlah        = w["jumlah"]
+            break
+
+    if not found:
+        return await ctx.send(f"❌ Request ID `{req_id}` tidak ditemukan.", delete_after=8)
+
+    save_withdraw(wd_log)
+    await ctx.send(f"✅ Withdraw `{req_id}` ditandai **selesai**.")
+
+    # Notif ke user
+    try:
+        user = await bot.fetch_user(int(target_uid))
+        await user.send(
+            f"✅ **Withdraw kamu telah diproses!**\n"
+            f"ID: `{req_id}` | Jumlah: **Rp{jumlah:,}**\n"
+            f"Diproses oleh admin **{ctx.author.display_name}**.\n"
+            f"Cek e-wallet kamu!"
+        )
+    except Exception:
+        pass
+
+
+# ═══════════════════════════════════════════════════════
+#  TOPUP & SETPRICE SYSTEM
+# ═══════════════════════════════════════════════════════
+
+TOPUP_FILE       = "topup.json"
+GACHA_CONFIG_FILE = "gacha_config.json"
+
+TOPUP_PACKAGES = {
+    "5000":  {"idr": 5000,  "label": "Starter",  "emoji": "🥉", "bonus": 0},
+    "10000": {"idr": 10000, "label": "Regular",   "emoji": "🥈", "bonus": 500},
+}
+TOPUP_EWALLET = ["GoPay", "OVO", "Dana", "BSI", "BRI", "BCA", "Mandiri"]
+
+def load_topup():       return load_json(TOPUP_FILE, default=[])
+def save_topup(d):      save_json(TOPUP_FILE, d)
+def load_gacha_config(): return load_json(GACHA_CONFIG_FILE, default={})
+def save_gacha_config(d): save_json(GACHA_CONFIG_FILE, d)
+
+def get_sell_price(rarity: str) -> int:
+    """Ambil harga jual dari config (override), fallback ke default."""
+    cfg = load_gacha_config()
+    prices = cfg.get("sell_prices", {})
+    return prices.get(rarity, POKEMON_ITEMS[rarity]["sell_price"])
+
+def get_idr_range():
+    """Ambil range IDR gacha dari config, fallback ke default."""
+    cfg = load_gacha_config()
+    return (
+        cfg.get("idr_min", GACHA_IDR_MIN),
+        cfg.get("idr_max", GACHA_IDR_MAX)
+    )
+
+
+# ══════════════════════════════════════════════════════
+#  !topup — Beli IDR virtual
+# ══════════════════════════════════════════════════════
+@bot.command(name="topup", aliases=["isi", "beli"])
+async def topup_cmd(ctx, paket: str = None):
+    """Topup saldo IDR virtual. Format: !topup <5000/10000>"""
+    # Hanya bisa dilakukan di DM
+    if not isinstance(ctx.channel, discord.DMChannel):
+        await ctx.message.delete()
+        try:
+            await ctx.author.send(
+                "🔒 Demi keamanan, command `!topup` hanya bisa dilakukan di **DM bot** ini.\n"
+                "Silakan ketik `!topup` langsung di sini."
+            )
+        except discord.Forbidden:
+            pass
+        return
+    uid = str(ctx.author.id)
+
+    # Tampilkan menu jika tidak ada argumen
+    if paket is None or paket not in TOPUP_PACKAGES:
+        embed = discord.Embed(
+            title="💳 Topup Saldo IDR Virtual",
+            description=(
+                "Pilih paket topup untuk menambah saldo IDR virtualmu.\n"
+                "Setelah konfirmasi, admin akan memverifikasi pembayaran."
+            ),
+            color=discord.Color.from_rgb(88, 101, 242)
+        )
+        for key, pkg in TOPUP_PACKAGES.items():
+            bonus_str = f" + **Rp{pkg['bonus']:,} bonus**" if pkg["bonus"] > 0 else ""
+            embed.add_field(
+                name=f"{pkg['emoji']} Paket {pkg['label']} — Rp{pkg['idr']:,}",
+                value=(
+                    f"Bayar: **Rp{int(key):,}**{bonus_str}\n"
+                    f"Dapat: **Rp{pkg['idr'] + pkg['bonus']:,}** IDR virtual\n"
+                    f"Command: `!topup {key}`"
+                ),
+                inline=False
+            )
+        embed.add_field(
+            name="📌 Metode Pembayaran",
+            value=" | ".join(f"`{e}`" for e in TOPUP_EWALLET),
+            inline=False
+        )
+        embed.set_footer(text="Saldo diproses manual oleh admin dalam 1x24 jam.")
+        return await ctx.send(embed=embed)
+
+    pkg = TOPUP_PACKAGES[paket]
+    total_dapat = pkg["idr"] + pkg["bonus"]
+
+    # Konfirmasi via DM
+    await ctx.send(
+        f"📩 Cek DM kamu {ctx.author.mention} untuk melanjutkan topup.",
+        delete_after=10
+    )
+
+    def check_dm(m):
+        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+    try:
+        confirm_embed = discord.Embed(
+            title=f"{pkg['emoji']} Konfirmasi Topup — Rp{int(paket):,}",
+            description=(
+                f"Kamu akan melakukan topup:\n\n"
+                f"💰 Bayar: **Rp{int(paket):,}**\n"
+                f"🎁 Dapat: **Rp{total_dapat:,}** IDR virtual"
+                + (f"\n✨ Termasuk bonus **Rp{pkg['bonus']:,}**!" if pkg["bonus"] > 0 else "") +
+                f"\n\n**Balas dengan nomor e-wallet tujuan transfer:**\n"
+                f"Contoh: `GoPay 081234567890`\n\n"
+                f"_(Balas dalam 90 detik, ketik `batal` untuk membatalkan)_"
+            ),
+            color=discord.Color.blue()
+        )
+        await ctx.author.send(embed=confirm_embed)
+        reply = await bot.wait_for("message", check=check_dm, timeout=90)
+
+        if reply.content.lower() == "batal":
+            return await ctx.author.send("❌ Topup dibatalkan.")
+
+        ewallet_user = reply.content.strip()
+
+        # Tanya bukti transfer
+        await ctx.send(
+            "📸 Sekarang kirim **screenshot bukti transfer** kamu.\n"
+            "_(Attach gambar dalam 120 detik)_"
+        )
+
+        def check_dm_img(m):
+            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+        img_reply = await bot.wait_for("message", check=check_dm_img, timeout=120)
+        bukti_url = img_reply.attachments[0].url if img_reply.attachments else "(tidak ada gambar)"
+
+    except asyncio.TimeoutError:
+        return await ctx.send("❌ Timeout. Topup dibatalkan.")
+
+    # Simpan request topup
+    req_id   = f"TP-{ctx.author.id}-{int(datetime.datetime.utcnow().timestamp())}"
+    tp_log   = load_topup()
+    tp_log.append({
+        "req_id":     req_id,
+        "uid":        uid,
+        "username":   str(ctx.author),
+        "paket":      paket,
+        "bayar":      int(paket),
+        "dapat":      total_dapat,
+        "ewallet":    ewallet_user,
+        "bukti":      bukti_url,
+        "status":     "pending",
+        "time":       datetime.datetime.utcnow().isoformat(),
+    })
+    save_topup(tp_log)
+
+    # Konfirmasi ke user
+    await ctx.send(
+        f"✅ **Request topup diterima!**\n"
+        f"🆔 ID: `{req_id}`\n"
+        f"📦 Paket: **{pkg['label']}** — Rp{int(paket):,}\n"
+        f"🎁 Akan dapat: **Rp{total_dapat:,}** IDR virtual\n\n"
+        f"*Admin akan memverifikasi dalam 1x24 jam.*"
+    )
+
+    # Notif admin
+    owner = bot.get_user(OWNER_ID)
+    if owner:
+        admin_embed = discord.Embed(
+            title="💳 Request Topup Baru",
+            color=discord.Color.green(),
+            timestamp=datetime.datetime.utcnow()
+        )
+        admin_embed.add_field(name="👤 User",      value=f"{ctx.author} (`{uid}`)",  inline=True)
+        admin_embed.add_field(name="📦 Paket",     value=f"{pkg['emoji']} {pkg['label']} — Rp{int(paket):,}", inline=True)
+        admin_embed.add_field(name="🎁 Dapat",     value=f"Rp{total_dapat:,}",       inline=True)
+        admin_embed.add_field(name="💳 E-Wallet",  value=ewallet_user,               inline=True)
+        admin_embed.add_field(name="🆔 Req ID",    value=f"`{req_id}`",              inline=True)
+        if bukti_url != "(tidak ada gambar)":
+            admin_embed.set_image(url=bukti_url)
+        admin_embed.set_footer(text=f"Gunakan !topupok {req_id} untuk approve")
+        try:
+            await owner.send(embed=admin_embed)
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════
+#  !topupok & !topupbatal — Admin approve/tolak topup
+# ══════════════════════════════════════════════════════
+@bot.command(name="topupok")
+@commands.guild_only()
+async def topupok_cmd(ctx, req_id: str = None):
+    """Admin: approve topup dan tambah saldo user. !topupok <req_id>"""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+    if not req_id:
+        return await ctx.send("❌ Format: `!topupok <req_id>`", delete_after=8)
+
+    tp_log = load_topup()
+    found  = None
+    for t in tp_log:
+        if t["req_id"] == req_id:
+            found = t
+            break
+
+    if not found:
+        return await ctx.send(f"❌ Request `{req_id}` tidak ditemukan.", delete_after=8)
+    if found["status"] != "pending":
+        return await ctx.send(f"⚠️ Request ini sudah `{found['status']}`.", delete_after=8)
+
+    found["status"]    = "approved"
+    found["approved_by"] = str(ctx.author)
+    found["approved_at"] = datetime.datetime.utcnow().isoformat()
+    save_topup(tp_log)
+
+    # Tambah saldo
+    gacha_data = load_gacha()
+    uid = found["uid"]
+    if uid not in gacha_data:
+        gacha_data[uid] = {"saldo": 0, "last_gacha": None, "total_gacha": 0}
+    gacha_data[uid]["saldo"] = gacha_data[uid].get("saldo", 0) + found["dapat"]
+    save_gacha(gacha_data)
+
+    await ctx.send(
+        f"✅ Topup `{req_id}` di-approve!\n"
+        f"**Rp{found['dapat']:,}** ditambahkan ke saldo **{found['username']}**."
+    )
+
+    try:
+        user = await bot.fetch_user(int(uid))
+        await user.send(
+            f"🎉 **Topup kamu berhasil diverifikasi!**\n"
+            f"ID: `{req_id}`\n"
+            f"**Rp{found['dapat']:,}** IDR virtual telah ditambahkan ke saldumu!\n"
+            f"Cek saldo: `!claim`"
+        )
+    except Exception:
+        pass
+
+
+@bot.command(name="topupbatal")
+@commands.guild_only()
+async def topupbatal_cmd(ctx, req_id: str = None, *, alasan: str = "Tidak ada keterangan"):
+    """Admin: tolak topup. !topupbatal <req_id> [alasan]"""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+    if not req_id:
+        return await ctx.send("❌ Format: `!topupbatal <req_id> <alasan>`", delete_after=8)
+
+    tp_log = load_topup()
+    found  = None
+    for t in tp_log:
+        if t["req_id"] == req_id:
+            found = t
+            break
+
+    if not found:
+        return await ctx.send(f"❌ Request `{req_id}` tidak ditemukan.", delete_after=8)
+
+    found["status"]      = "rejected"
+    found["rejected_by"] = str(ctx.author)
+    found["alasan"]      = alasan
+    save_topup(tp_log)
+
+    await ctx.send(f"✅ Topup `{req_id}` ditolak.")
+
+    try:
+        user = await bot.fetch_user(int(found["uid"]))
+        await user.send(
+            f"❌ **Topup kamu ditolak.**\n"
+            f"ID: `{req_id}` | Paket: Rp{found['bayar']:,}\n"
+            f"Alasan: **{alasan}**\n\n"
+            f"Hubungi admin jika ada pertanyaan."
+        )
+    except Exception:
+        pass
+
+
+@bot.command(name="topuplist")
+@commands.guild_only()
+async def topuplist_cmd(ctx, status_filter: str = "pending"):
+    """Admin: lihat daftar request topup. !topuplist [pending/all]"""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+
+    tp_log = load_topup()
+    if status_filter.lower() != "all":
+        tp_log = [t for t in tp_log if t.get("status") == status_filter.lower()]
+
+    if not tp_log:
+        return await ctx.send(f"📭 Tidak ada topup `{status_filter}`.", delete_after=8)
+
+    embed = discord.Embed(
+        title=f"💳 Topup Log — {status_filter.upper()}",
+        color=discord.Color.blue(),
+        timestamp=datetime.datetime.utcnow()
+    )
+    for t in tp_log[-10:]:
+        pkg = TOPUP_PACKAGES.get(t.get("paket", ""), {})
+        embed.add_field(
+            name=f"`{t['req_id']}` — {t['username']}",
+            value=(
+                f"📦 Rp{t['bayar']:,} → 🎁 Rp{t['dapat']:,} | "
+                f"💳 {t['ewallet']}\n"
+                f"📅 {t['time'][:16]} | Status: **{t['status']}**"
+            ),
+            inline=False
+        )
+    embed.set_footer(text=f"Total: {len(tp_log)} | !topupok <id> | !topupbatal <id>")
+    await ctx.send(embed=embed)
+
+
+# ══════════════════════════════════════════════════════
+#  !setpokeprice — Admin set harga jual pokemon via DM
+# ══════════════════════════════════════════════════════
+@bot.command(name="setpokeprice", aliases=["setprice_pokemon", "pokeprice"])
+async def setpokeprice_cmd(ctx):
+    """Admin: set harga jual pokemon per rarity via DM interaktif."""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+
+    cfg = load_gacha_config()
+    current_prices = cfg.get("sell_prices", {})
+
+    def check_dm(m):
+        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+    try:
+        # Kirim menu ke DM
+        menu_embed = discord.Embed(
+            title="⚙️ Set Harga Jual Pokemon",
+            description=(
+                "Pilih rarity yang ingin diubah harganya.\n"
+                "Balas dengan **angka** pilihanmu:\n\n"
+                "```\n"
+                "1. Common     (tidak bisa dijual)\n"
+                "2. Uncommon\n"
+                "3. Rare\n"
+                "4. Epic\n"
+                "5. Legendary\n"
+                "6. Range IDR Gacha (min & max)\n"
+                "7. Selesai\n"
+                "```"
+            ),
+            color=discord.Color.orange()
+        )
+
+        rarity_order = ["Common","Uncommon","Rare","Epic","Legendary"]
+        current_str  = "\n".join(
+            f"{r}: **Rp{current_prices.get(r, POKEMON_ITEMS[r]['sell_price']):,}**"
+            for r in rarity_order
+        )
+        idr_min, idr_max = get_idr_range()
+        current_str += f"\nIDR Gacha: **Rp{idr_min:,} – Rp{idr_max:,}**"
+        menu_embed.add_field(name="💰 Harga Saat Ini", value=current_str, inline=False)
+        menu_embed.set_footer(text="Ketik 7 untuk selesai kapan saja.")
+
+        await ctx.author.send(embed=menu_embed)
+        if not isinstance(ctx.channel, discord.DMChannel):
+            await ctx.send("📩 Cek DM kamu untuk mengatur harga.", delete_after=8)
+
+        rarity_map = {"1":"Common","2":"Uncommon","3":"Rare","4":"Epic","5":"Legendary"}
+
+        while True:
+            reply = await bot.wait_for("message", check=check_dm, timeout=120)
+            choice = reply.content.strip()
+
+            if choice == "7":
+                save_gacha_config(cfg)
+                done_embed = discord.Embed(
+                    title="✅ Harga Berhasil Disimpan!",
+                    color=discord.Color.green()
+                )
+                updated_prices = cfg.get("sell_prices", {})
+                idr_min, idr_max = get_idr_range()
+                summary = "\n".join(
+                    f"{r}: **Rp{updated_prices.get(r, POKEMON_ITEMS[r]['sell_price']):,}**"
+                    for r in rarity_order
+                )
+                summary += f"\nIDR Gacha: **Rp{idr_min:,} – Rp{idr_max:,}**"
+                done_embed.add_field(name="💰 Harga Final", value=summary, inline=False)
+                return await ctx.author.send(embed=done_embed)
+
+            elif choice == "6":
+                await ctx.author.send(
+                    f"📊 **Set Range IDR Gacha**\n"
+                    f"Range saat ini: **Rp{idr_min:,} – Rp{idr_max:,}**\n\n"
+                    f"Balas format: `min max`\n"
+                    f"Contoh: `200 1500`"
+                )
+                range_reply = await bot.wait_for("message", check=check_dm, timeout=60)
+                parts = range_reply.content.strip().split()
+                if len(parts) == 2 and all(p.isdigit() for p in parts):
+                    cfg["idr_min"] = int(parts[0])
+                    cfg["idr_max"] = int(parts[1])
+                    await ctx.author.send(
+                        f"✅ Range IDR diubah: **Rp{int(parts[0]):,} – Rp{int(parts[1]):,}**\n"
+                        f"Lanjut edit? Balas angka rarity atau `7` untuk selesai."
+                    )
+                else:
+                    await ctx.author.send("❌ Format salah. Contoh: `200 1500`")
+
+            elif choice in rarity_map:
+                rarity = rarity_map[choice]
+                current = current_prices.get(rarity, POKEMON_ITEMS[rarity]["sell_price"])
+
+                if rarity == "Common":
+                    await ctx.author.send(
+                        f"⚠️ **Common** saat ini tidak bisa dijual (Rp0).\n"
+                        f"Mau set harga jualnya? Balas angka harga atau `0` untuk tetap gratis."
+                    )
+                else:
+                    await ctx.author.send(
+                        f"✏️ **Set harga {rarity}**\n"
+                        f"Harga saat ini: **Rp{current:,}**\n\n"
+                        f"Balas dengan harga baru (angka saja).\n"
+                        f"Contoh: `1500`"
+                    )
+
+                price_reply = await bot.wait_for("message", check=check_dm, timeout=60)
+                if price_reply.content.strip().isdigit():
+                    new_price = int(price_reply.content.strip())
+                    if "sell_prices" not in cfg:
+                        cfg["sell_prices"] = {}
+                    cfg["sell_prices"][rarity] = new_price
+                    await ctx.author.send(
+                        f"✅ Harga **{rarity}** diubah ke **Rp{new_price:,}**\n"
+                        f"Lanjut edit? Balas angka rarity atau `7` untuk selesai."
+                    )
+                else:
+                    await ctx.author.send("❌ Harus angka. Coba lagi.")
+
+            else:
+                await ctx.author.send("❌ Pilihan tidak valid. Balas 1-7.")
+
+    except asyncio.TimeoutError:
+        await ctx.author.send("⏳ Timeout. Perubahan yang sudah diinput **tidak disimpan**. Jalankan `!setpokeprice` lagi.")
+    except discord.Forbidden:
+        await ctx.send("❌ Bot tidak bisa DM kamu.", delete_after=8)
+
+
+# ══════════════════════════════════════════════════════
+#  !setgachawin — Admin set hadiah pokemon (tambah/hapus dari pool)
+# ══════════════════════════════════════════════════════
+@bot.command(name="setgachawin", aliases=["editpokemon"])
+async def setgachawin_cmd(ctx, action: str = None, rarity: str = None, *, pokemon_name: str = None):
+    """Admin: tambah/hapus pokemon dari pool gacha.
+    !setgachawin add <rarity> <nama>
+    !setgachawin remove <rarity> <nama>
+    !setgachawin list
+    """
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+
+    cfg = load_gacha_config()
+    # Ambil pool override (jika ada), fallback ke default
+    pool = cfg.get("pokemon_pool", {r: list(POKEMON_ITEMS[r]["pokemons"]) for r in POKEMON_ITEMS})
+
+    if action is None or action.lower() == "list":
+        embed = discord.Embed(
+            title="🐾 Pool Pokemon Gacha",
+            color=discord.Color.from_rgb(88, 101, 242)
+        )
+        for r, info in POKEMON_ITEMS.items():
+            names = pool.get(r, info["pokemons"])
+            embed.add_field(
+                name=f"{info['emoji']} {r} ({len(names)} pokemon)",
+                value=", ".join(names)[:400],
+                inline=False
+            )
+        embed.set_footer(text="!setgachawin add <rarity> <nama> | !setgachawin remove <rarity> <nama>")
+        return await ctx.send(embed=embed)
+
+    if not rarity or not pokemon_name:
+        return await ctx.send(
+            "❌ Format: `!setgachawin add/remove <rarity> <nama>`\n"
+            "Rarity: Common / Uncommon / Rare / Epic / Legendary",
+            delete_after=10
+        )
+
+    # Normalize rarity
+    rarity_norm = rarity.capitalize()
+    if rarity_norm not in POKEMON_ITEMS:
+        return await ctx.send(
+            f"❌ Rarity `{rarity}` tidak valid.\n"
+            f"Pilihan: Common, Uncommon, Rare, Epic, Legendary",
+            delete_after=8
+        )
+
+    current_pool = pool.get(rarity_norm, list(POKEMON_ITEMS[rarity_norm]["pokemons"]))
+
+    if action.lower() == "add":
+        if pokemon_name in current_pool:
+            return await ctx.send(f"⚠️ **{pokemon_name}** sudah ada di pool {rarity_norm}.", delete_after=8)
+        current_pool.append(pokemon_name)
+        pool[rarity_norm] = current_pool
+        cfg["pokemon_pool"] = pool
+        save_gacha_config(cfg)
+        await ctx.send(
+            f"✅ **{pokemon_name}** ditambahkan ke pool **{rarity_norm}**!\n"
+            f"Total pool {rarity_norm}: {len(current_pool)} pokemon."
+        )
+
+    elif action.lower() == "remove":
+        if pokemon_name not in current_pool:
+            return await ctx.send(f"❌ **{pokemon_name}** tidak ada di pool {rarity_norm}.", delete_after=8)
+        if len(current_pool) <= 1:
+            return await ctx.send(f"❌ Pool {rarity_norm} minimal harus ada 1 pokemon.", delete_after=8)
+        current_pool.remove(pokemon_name)
+        pool[rarity_norm] = current_pool
+        cfg["pokemon_pool"] = pool
+        save_gacha_config(cfg)
+        await ctx.send(
+            f"✅ **{pokemon_name}** dihapus dari pool **{rarity_norm}**.\n"
+            f"Sisa pool {rarity_norm}: {len(current_pool)} pokemon."
+        )
+    else:
+        await ctx.send("❌ Action harus `add` atau `remove`.", delete_after=8)
 
 
 bot.run(TOKEN)
