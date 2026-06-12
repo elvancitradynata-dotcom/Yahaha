@@ -3743,6 +3743,72 @@ async def cekid_cmd(ctx, member: discord.Member = None):
     embed.add_field(name="🆔 ID",       value=f"`{target.id}`", inline=True)
     embed.set_thumbnail(url=target.display_avatar.url)
     await ctx.send(embed=embed)
+# ── !absen ──────────────────────────────────────────────
+@bot.command(name="absen")
+async def absen_cmd(ctx):
+    """Absen dengan mengisi Nama, Reason, dan Berapa Lama via DM atau channel."""
 
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
+
+    messages_to_delete = [ctx.message]  # simpan pesan !absen untuk dihapus
+
+    try:
+        # Pertanyaan 1: Nama
+        q1 = await ctx.send(f"{ctx.author.mention} Siapa **nama** kamu?")
+        messages_to_delete.append(q1)
+
+        jawaban_nama = await bot.wait_for("message", check=check, timeout=60)
+        messages_to_delete.append(jawaban_nama)
+        nama = jawaban_nama.content
+
+        # Pertanyaan 2: Reason
+        q2 = await ctx.send(f"{ctx.author.mention} Apa **alasan** absenmu?")
+        messages_to_delete.append(q2)
+
+        jawaban_reason = await bot.wait_for("message", check=check, timeout=60)
+        messages_to_delete.append(jawaban_reason)
+        reason = jawaban_reason.content
+
+        # Pertanyaan 3: Berapa Lama
+        q3 = await ctx.send(f"{ctx.author.mention} **Berapa lama** kamu akan absen?")
+        messages_to_delete.append(q3)
+
+        jawaban_lama = await bot.wait_for("message", check=check, timeout=60)
+        messages_to_delete.append(jawaban_lama)
+        berapa_lama = jawaban_lama.content
+
+        # Hapus semua pesan sebelumnya
+        try:
+            await ctx.channel.purge(limit=None, check=lambda m: m in messages_to_delete)
+        except discord.Forbidden:
+            pass
+
+        # Kirim rekapan
+        embed = discord.Embed(
+            title="📋 Form Absen",
+            color=discord.Color.orange(),
+            timestamp=datetime.datetime.utcnow()
+        )
+        embed.set_thumbnail(url=ctx.author.display_avatar.url)
+        embed.add_field(name="Nama",        value=nama,        inline=False)
+        embed.add_field(name="Reason",      value=reason,      inline=False)
+        embed.add_field(name="Berapa Lama", value=berapa_lama, inline=False)
+        embed.set_footer(
+            text=f"{ctx.author.display_name} • {ctx.author.id}",
+            icon_url=ctx.author.display_avatar.url
+        )
+        await ctx.send(embed=embed)
+
+    except asyncio.TimeoutError:
+        # Hapus semua pesan jika timeout
+        try:
+            await ctx.channel.purge(limit=None, check=lambda m: m in messages_to_delete)
+        except discord.Forbidden:
+            pass
+        timeout_msg = await ctx.send(
+            f"{ctx.author.mention} ⏰ Waktu habis! Silakan ketik `!absen` lagi.",
+            delete_after=10
+        )
 
 bot.run(TOKEN)
