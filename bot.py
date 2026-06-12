@@ -3746,12 +3746,12 @@ async def cekid_cmd(ctx, member: discord.Member = None):
 # ── !absen ──────────────────────────────────────────────
 @bot.command(name="absen")
 async def absen_cmd(ctx):
-    """Absen dengan mengisi Nama, Reason, dan Berapa Lama via DM atau channel."""
+    """Absen dengan mengisi Nama, Reason, dan Berapa Lama."""
 
     def check(m):
         return m.author == ctx.author and m.channel == ctx.channel
 
-    messages_to_delete = [ctx.message]  # simpan pesan !absen untuk dihapus
+    messages_to_delete = [ctx.message]
 
     try:
         # Pertanyaan 1: Nama
@@ -3778,11 +3778,13 @@ async def absen_cmd(ctx):
         messages_to_delete.append(jawaban_lama)
         berapa_lama = jawaban_lama.content
 
-        # Hapus semua pesan sebelumnya
-        try:
-            await ctx.channel.purge(limit=None, check=lambda m: m in messages_to_delete)
-        except discord.Forbidden:
-            pass
+        # Hapus pesan satu per satu
+        for msg in messages_to_delete:
+            try:
+                await msg.delete()
+                await asyncio.sleep(0.3)  # delay kecil hindari rate limit
+            except Exception:
+                pass
 
         # Kirim rekapan
         embed = discord.Embed(
@@ -3801,12 +3803,13 @@ async def absen_cmd(ctx):
         await ctx.send(embed=embed)
 
     except asyncio.TimeoutError:
-        # Hapus semua pesan jika timeout
-        try:
-            await ctx.channel.purge(limit=None, check=lambda m: m in messages_to_delete)
-        except discord.Forbidden:
-            pass
-        timeout_msg = await ctx.send(
+        for msg in messages_to_delete:
+            try:
+                await msg.delete()
+                await asyncio.sleep(0.3)
+            except Exception:
+                pass
+        await ctx.send(
             f"{ctx.author.mention} ⏰ Waktu habis! Silakan ketik `!absen` lagi.",
             delete_after=10
         )
