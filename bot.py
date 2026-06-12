@@ -759,7 +759,7 @@ class TicketView(View):
             )
             tickets[str(ticket_channel.id)] = {
                 "user_id": member.id, "status": "open",
-                "created_at": str(datetime.datetime.utcnow())
+                "created_at": str(datetime.datetime.now(datetime.timezone.utc))
             }
             save_tickets(tickets)
 
@@ -772,7 +772,7 @@ class TicketView(View):
                     "Klik **Tutup Ticket** jika sudah selesai."
                 ),
                 color=discord.Color.blue(),
-                timestamp=datetime.datetime.utcnow()
+                timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
             embed.set_footer(text="Asisten Lurah BFL • Ticket System")
             await ticket_channel.send(content=f"{member.mention}", embed=embed,
@@ -854,7 +854,7 @@ class GiveawayView(View):
 
 def build_giveaway_embed(gw: dict) -> discord.Embed:
     end_dt = datetime.datetime.fromisoformat(gw["end_time"])
-    now    = datetime.datetime.utcnow()
+    now    = datetime.datetime.now(datetime.timezone.utc)
     sisa   = end_dt - now
     if sisa.total_seconds() > 0:
         h, rem = divmod(int(sisa.total_seconds()), 3600)
@@ -872,7 +872,7 @@ def build_giveaway_embed(gw: dict) -> discord.Embed:
             f"🏆 **Hadiah:** {gw['prize']}"
         ),
         color=discord.Color.gold(),
-        timestamp=datetime.datetime.utcnow()
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
     embed.set_footer(text="Asisten Lurah BFL • Giveaway System")
     return embed
@@ -884,7 +884,7 @@ def build_giveaway_embed(gw: dict) -> discord.Embed:
 async def on_ready():
     print(f"✅ {bot.user} online!")
     await bot.change_presence(
-        activity=discord.Activity(type=discord.ActivityType.watching, name="WATCHING BFL SERVER")
+        activity=discord.Activity(type=discord.ActivityType.watching, name="Desa BFL 🏘️")
     )
     bot.add_view(TicketView())
     tickets = load_tickets()
@@ -975,7 +975,7 @@ async def on_message(message):
                     "Pilih role lalu ACC/REJECT."
                 ),
                 color=discord.Color.orange(),
-                timestamp=datetime.datetime.utcnow()
+                timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
             guild_id = None
             for g in bot.guilds:
@@ -996,6 +996,14 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
+
+    # ── Auto Reply ──
+    autoreply_data = load_autoreply()
+    content_lower = message.content.lower()
+    for trigger, jawaban in autoreply_data.items():
+        if trigger in content_lower:
+            await message.channel.send(jawaban)
+            break
 
     # ── XP System ──
     data = load_data()
@@ -1044,7 +1052,7 @@ async def check_giveaways():
         if gw.get("ended"):
             continue
         end_dt = datetime.datetime.fromisoformat(gw["end_time"])
-        if datetime.datetime.utcnow() >= end_dt:
+        if datetime.datetime.now(datetime.timezone.utc) >= end_dt:
             gw["ended"] = True
             changed = True
             ch = bot.get_channel(int(gw["channel_id"]))
@@ -1130,7 +1138,7 @@ async def check_tiktok():
             title=f"🎵 @{TIKTOK_USERNAME} baru posting di TikTok!",
             description=f"👇\n{tiktok_url}",
             color=discord.Color.from_rgb(254, 44, 85),
-            timestamp=datetime.datetime.utcnow()
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         embed.set_footer(text="Asisten Lurah BFL • TikTok Tracker")
         await channel.send(embed=embed)
@@ -1207,7 +1215,7 @@ async def warn(ctx, member: discord.Member = None, *, alasan="Tidak ada alasan")
     warns[uid].append({
         "alasan": alasan,
         "oleh": str(ctx.author.id),
-        "waktu": str(datetime.datetime.utcnow())
+        "waktu": str(datetime.datetime.now(datetime.timezone.utc))
     })
     total = len(warns[uid])
     save_warns(warns)
@@ -1288,7 +1296,7 @@ async def afk(ctx, *, alasan="Tidak ada alasan"):
     afk_data = load_afk()
     afk_data[str(ctx.author.id)] = {
         "reason": alasan,
-        "since": str(datetime.datetime.utcnow())
+        "since": str(datetime.datetime.now(datetime.timezone.utc))
     }
     save_afk(afk_data)
     await ctx.send(f"💤 {ctx.author.mention} sekarang **offline** — {alasan}", delete_after=10)
@@ -1326,8 +1334,8 @@ async def set_giveaway(ctx, channel_id: int):
         prize = prize_msg.content.strip()
 
         # Buat giveaway
-        end_time = datetime.datetime.utcnow() + datetime.timedelta(seconds=seconds)
-        gid      = str(int(datetime.datetime.utcnow().timestamp()))
+        end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=seconds)
+        gid      = str(int(datetime.datetime.now(datetime.timezone.utc).timestamp()))
         gw_data  = {
             "channel_id": str(channel_id),
             "prize": prize,
@@ -1424,7 +1432,7 @@ async def kirim_quote_cmd(ctx, channel_id: int = None):
         title="💬 Quote of the Day",
         description=f"*\"{quote}\"*",
         color=discord.Color.gold(),
-        timestamp=datetime.datetime.utcnow()
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
     embed.set_footer(text="Asisten Lurah BFL • Quote of the Day")
     await ch.send(embed=embed)
@@ -1480,7 +1488,7 @@ async def pengumuman(ctx, channel_id: int, *, pesan: str):
         return
     embed = discord.Embed(
         title="📢 PENGUMUMAN", description=pesan,
-        color=discord.Color.blue(), timestamp=datetime.datetime.utcnow()
+        color=discord.Color.blue(), timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
     embed.set_footer(text="Asisten Lurah BFL")
     await channel.send("@everyone", embed=embed)
@@ -1982,7 +1990,7 @@ async def gacha_claim(ctx):
 
     # Admin bebas claim tanpa cooldown
     if not is_admin(ctx.author):
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         last = user.get("last_claim")
         if last:
             last_dt = datetime.datetime.fromisoformat(last)
@@ -1999,7 +2007,7 @@ async def gacha_claim(ctx):
                 )
                 embed.set_footer(text="Asisten Lurah BFL • Gacha")
                 return await ctx.send(embed=embed)
-        user["last_claim"] = datetime.datetime.utcnow().isoformat()
+        user["last_claim"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     user["tiket"] = user.get("tiket", 0) + 1
     save_gacha(gacha)
@@ -2211,7 +2219,7 @@ async def topup_cmd(ctx, jumlah: int = None):
         "user_id": str(ctx.author.id),
         "user_name": str(ctx.author),
         "jumlah": jumlah,
-        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "status": "pending"
     })
     save_ewallet(log)
@@ -2226,7 +2234,7 @@ async def topup_cmd(ctx, jumlah: int = None):
         ),
         color=discord.Color.orange()
     )
-    embed.set_footer(text="Asisten Lurah BFL • E-Wallet | ID: " + str(int(datetime.datetime.utcnow().timestamp())))
+    embed.set_footer(text="Asisten Lurah BFL • E-Wallet | ID: " + str(int(datetime.datetime.now(datetime.timezone.utc).timestamp())))
     await ctx.send(embed=embed)
 
 
@@ -2271,7 +2279,7 @@ async def wd_cmd(ctx, jumlah: int = None):
         "user_id": str(ctx.author.id),
         "user_name": str(ctx.author),
         "jumlah": jumlah,
-        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "status": "pending"
     })
     save_ewallet(log)
@@ -2340,7 +2348,7 @@ async def cek_saldo(ctx, target: discord.Member = None):
     uid   = str(member.id)
     user  = _get_gacha_user(gacha, uid)
 
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     last = user.get("last_claim")
     if last:
         last_dt = datetime.datetime.fromisoformat(last)
@@ -2846,7 +2854,7 @@ async def _check_automod(message):
             deleted = []
 
         if isinstance(message.author, discord.Member):
-            until = datetime.datetime.utcnow() + datetime.timedelta(seconds=mute_dur)
+            until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=mute_dur)
             try:
                 await message.author.timeout(until, reason=f"Auto Mod: Spam ({threshold} pesan/{interval}s)")
             except Exception:
@@ -2863,7 +2871,7 @@ async def _check_automod(message):
                 f"⏳ Timeout selama **{dur_str}**"
             ),
             color=discord.Color.red(),
-            timestamp=datetime.datetime.utcnow()
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         embed.set_footer(text="Asisten Lurah BFL • Auto Mod")
         try:
@@ -2991,7 +2999,7 @@ def _generate_welcome_card(member_name: str, guild_name: str, member_count: int,
 async def on_member_join(member):
     # ── Simpan waktu join ke tracking ──
     jt = load_join_tracking()
-    jt[str(member.id)] = member.joined_at.isoformat() if member.joined_at else datetime.datetime.utcnow().isoformat()
+    jt[str(member.id)] = member.joined_at.isoformat() if member.joined_at else datetime.datetime.now(datetime.timezone.utc).isoformat()
     save_join_tracking(jt)
 
     cfg   = load_welcome_cfg()
@@ -3010,7 +3018,7 @@ async def on_member_join(member):
             f"📅 Akun dibuat: <t:{int(member.created_at.timestamp())}:R>"
         ),
         color=discord.Color.from_rgb(80, 60, 180),
-        timestamp=datetime.datetime.utcnow()
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
     embed.set_footer(text="Asisten Lurah BFL • Welcome")
 
@@ -3045,7 +3053,7 @@ async def on_member_remove(member):
             f"👥 Sisa member: **{member.guild.member_count}**"
         ),
         color=discord.Color.from_rgb(180, 60, 60),
-        timestamp=datetime.datetime.utcnow()
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text="Asisten Lurah BFL • Leave")
@@ -3174,7 +3182,7 @@ def _build_poll_embed(poll: dict, poll_id: str) -> discord.Embed:
         lines.append(f"{_NUMBER_EMOJIS[i]} **{opt}**\n`{bar}` {counts[i]} suara ({pct:.1f}%)")
 
     end_dt  = datetime.datetime.fromisoformat(poll["end_time"])
-    sisa    = end_dt - datetime.datetime.utcnow()
+    sisa    = end_dt - datetime.datetime.now(datetime.timezone.utc)
     sisa_s  = max(0, int(sisa.total_seconds()))
     h, rem  = divmod(sisa_s, 3600)
     m, s    = divmod(rem, 60)
@@ -3187,7 +3195,7 @@ def _build_poll_embed(poll: dict, poll_id: str) -> discord.Embed:
         title=f"📊 {'[SELESAI] ' if ended else ''}POLL — {poll['question']}",
         description="\n\n".join(lines),
         color=color,
-        timestamp=datetime.datetime.utcnow()
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
     embed.add_field(name="⏳ Sisa Waktu", value=sisa_str, inline=True)
     embed.add_field(name="🗳️ Total Vote", value=str(total), inline=True)
@@ -3307,8 +3315,8 @@ async def create_poll(ctx, duration: int, *, content: str):
     if duration < 1 or duration > 1440:
         return await ctx.send("❌ Durasi 1–1440 menit.", delete_after=8)
 
-    poll_id  = str(int(datetime.datetime.utcnow().timestamp()))
-    end_time = (datetime.datetime.utcnow() + datetime.timedelta(minutes=duration)).isoformat()
+    poll_id  = str(int(datetime.datetime.now(datetime.timezone.utc).timestamp()))
+    end_time = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=duration)).isoformat()
 
     poll = {
         "question":   question,
@@ -3400,7 +3408,7 @@ async def userinfo_cmd(ctx, member: discord.Member = None):
     top_color   = member.top_role.color
     color       = top_color if top_color != discord.Color.default() else discord.Color.from_rgb(88, 101, 242)
 
-    embed = discord.Embed(color=color, timestamp=datetime.datetime.utcnow())
+    embed = discord.Embed(color=color, timestamp=datetime.datetime.now(datetime.timezone.utc))
     embed.set_author(name=str(member), icon_url=member.display_avatar.url)
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="🆔 ID",               value=f"`{member.id}`",          inline=True)
@@ -3437,7 +3445,7 @@ def _build_role_embed(role: discord.Role, action: str, member: discord.Member,
         f"{'diberikan ke' if action == 'give' else 'dicabut dari'} {member.mention}."
     )
     embed  = discord.Embed(title=title, description=desc, color=color,
-                           timestamp=datetime.datetime.utcnow())
+                           timestamp=datetime.datetime.now(datetime.timezone.utc))
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="👤 Member",  value=f"{member} (`{member.id}`)", inline=True)
     embed.add_field(name="🎭 Role",    value=f"{role.mention} (`{role.id}`)", inline=True)
@@ -3504,7 +3512,7 @@ async def giverole_cmd(ctx, member: discord.Member = None, *, roles_input: str =
     embed = discord.Embed(
         title="🎭 Hasil Pemberian Role",
         color=color,
-        timestamp=datetime.datetime.utcnow()
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="👤 Member", value=f"{member.mention} (`{member.id}`)", inline=False)
@@ -3531,7 +3539,7 @@ async def giverole_cmd(ctx, member: discord.Member = None, *, roles_input: str =
                 title="🎉 Kamu Mendapat Role Baru!",
                 description=f"Role baru telah ditambahkan ke akunmu di **{ctx.guild.name}**.",
                 color=discord.Color.green(),
-                timestamp=datetime.datetime.utcnow()
+                timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
             dm_embed.add_field(name="🎭 Role Diberikan",
                                value=" ".join(success) if len(success) <= 3
@@ -3599,7 +3607,7 @@ async def cabutrole_cmd(ctx, member: discord.Member = None, *, roles_input: str 
     embed = discord.Embed(
         title="🗑️ Hasil Pencabutan Role",
         color=color,
-        timestamp=datetime.datetime.utcnow()
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="👤 Member", value=f"{member.mention} (`{member.id}`)", inline=False)
@@ -3625,7 +3633,7 @@ async def cabutrole_cmd(ctx, member: discord.Member = None, *, roles_input: str 
                 title="⚠️ Role Kamu Dicabut",
                 description=f"Beberapa role telah dihapus dari akunmu di **{ctx.guild.name}**.",
                 color=discord.Color.orange(),
-                timestamp=datetime.datetime.utcnow()
+                timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
             dm_embed.add_field(name="🗑️ Role Dicabut",
                                value=" ".join(success) if len(success) <= 3
@@ -3671,7 +3679,7 @@ async def roleinfo_cmd(ctx, *, role: discord.Role = None):
     embed = discord.Embed(
         title=f"🎭 Role Info — {role.name}",
         color=embed_color,
-        timestamp=datetime.datetime.utcnow()
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
     embed.add_field(name="🆔 ID",           value=f"`{role.id}`",           inline=True)
     embed.add_field(name="🎨 Warna",        value=f"`{color_hex}`",         inline=True)
@@ -3720,15 +3728,19 @@ async def listrole_cmd(ctx):
             title=f"🎭 Daftar Role Server — {ctx.guild.name}",
             description="\n".join(lines),
             color=discord.Color.from_rgb(88, 101, 242),
-            timestamp=datetime.datetime.utcnow()
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         embed.set_footer(
             text=f"Total {len(roles)} role  •  Halaman {page}/{total_page}",
             icon_url=ctx.guild.icon.url if ctx.guild.icon else None
         )
         await ctx.send(embed=embed)
-   
-# ── !cekid ──────────────────────────────────────────────
+
+
+
+# ═══════════════════════════════════════════════════════
+#  !CEKID
+# ═══════════════════════════════════════════════════════
 @bot.command(name="cekid", aliases=["myid", "idku"])
 async def cekid_cmd(ctx, member: discord.Member = None):
     """Cek Discord ID dan username. Format: !cekid atau !cekid @user"""
@@ -3737,13 +3749,17 @@ async def cekid_cmd(ctx, member: discord.Member = None):
     embed = discord.Embed(
         title="🆔 Discord ID",
         color=discord.Color.blurple(),
-        timestamp=datetime.datetime.utcnow()
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
     embed.add_field(name="👤 Username", value=f"`{target}`",    inline=True)
     embed.add_field(name="🆔 ID",       value=f"`{target.id}`", inline=True)
     embed.set_thumbnail(url=target.display_avatar.url)
     await ctx.send(embed=embed)
-# ── !absen ──────────────────────────────────────────────
+
+
+# ═══════════════════════════════════════════════════════
+#  !ABSEN
+# ═══════════════════════════════════════════════════════
 @bot.command(name="absen")
 async def absen_cmd(ctx):
     """Absen dengan mengisi Nama, Reason, dan Berapa Lama."""
@@ -3754,7 +3770,6 @@ async def absen_cmd(ctx):
     messages_to_delete = [ctx.message]
 
     try:
-        # Pertanyaan 1: Nama
         q1 = await ctx.send(f"{ctx.author.mention} Siapa **nama** kamu?")
         messages_to_delete.append(q1)
 
@@ -3762,7 +3777,6 @@ async def absen_cmd(ctx):
         messages_to_delete.append(jawaban_nama)
         nama = jawaban_nama.content
 
-        # Pertanyaan 2: Reason
         q2 = await ctx.send(f"{ctx.author.mention} Apa **alasan** absenmu?")
         messages_to_delete.append(q2)
 
@@ -3770,7 +3784,6 @@ async def absen_cmd(ctx):
         messages_to_delete.append(jawaban_reason)
         reason = jawaban_reason.content
 
-        # Pertanyaan 3: Berapa Lama
         q3 = await ctx.send(f"{ctx.author.mention} **Berapa lama** kamu akan absen?")
         messages_to_delete.append(q3)
 
@@ -3778,19 +3791,18 @@ async def absen_cmd(ctx):
         messages_to_delete.append(jawaban_lama)
         berapa_lama = jawaban_lama.content
 
-        # Hapus pesan satu per satu
+        # Hapus semua pesan satu per satu
         for msg in messages_to_delete:
             try:
                 await msg.delete()
-                await asyncio.sleep(0.3)  # delay kecil hindari rate limit
+                await asyncio.sleep(0.3)
             except Exception:
                 pass
 
-        # Kirim rekapan
         embed = discord.Embed(
             title="📋 Form Absen",
             color=discord.Color.orange(),
-            timestamp=datetime.datetime.utcnow()
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
         embed.add_field(name="Nama",        value=nama,        inline=False)
@@ -3813,7 +3825,9 @@ async def absen_cmd(ctx):
             f"{ctx.author.mention} ⏰ Waktu habis! Silakan ketik `!absen` lagi.",
             delete_after=10
         )
-        # ═══════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════
 #  AUTO REPLY SYSTEM
 # ═══════════════════════════════════════════════════════
 AUTOREPLY_FILE = "autoreply.json"
@@ -3829,48 +3843,38 @@ def save_autoreply(data):
         json.dump(data, f, indent=2)
 
 
-# ── !autoreply ──────────────────────────────────────────
 @bot.command(name="autoreply", aliases=["ar"])
 async def autoreply_cmd(ctx):
     """Kelola auto reply via DM. Hanya admin/owner."""
-    if not await is_admin(ctx):
+    if not is_admin(ctx.author):
         return await ctx.send("❌ Hanya admin yang bisa menggunakan perintah ini.", delete_after=5)
 
-    # Harus dijalankan via DM
+    def dm_check(m):
+        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+    # Kirim menu ke DM jika dari server
     if not isinstance(ctx.channel, discord.DMChannel):
         try:
             await ctx.message.delete()
         except Exception:
             pass
-        info = await ctx.send("📩 Cek DM kamu ya!", delete_after=5)
-        await ctx.author.send(
-            "📋 **Menu Auto Reply**\n\n"
-            "Ketik salah satu:\n"
-            "`tambah` — Tambah trigger baru\n"
-            "`hapus`  — Hapus trigger\n"
-            "`list`   — Lihat semua trigger\n"
-            "`batal`  — Keluar"
-        )
-    else:
-        await ctx.send(
-            "📋 **Menu Auto Reply**\n\n"
-            "Ketik salah satu:\n"
-            "`tambah` — Tambah trigger baru\n"
-            "`hapus`  — Hapus trigger\n"
-            "`list`   — Lihat semua trigger\n"
-            "`batal`  — Keluar"
-        )
+        await ctx.send("📩 Cek DM kamu ya!", delete_after=5)
 
-    def dm_check(m):
-        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+    menu_text = (
+        "📋 **Menu Auto Reply**\n\n"
+        "Ketik salah satu:\n"
+        "`tambah` — Tambah trigger baru\n"
+        "`hapus`  — Hapus trigger\n"
+        "`list`   — Lihat semua trigger\n"
+        "`batal`  — Keluar"
+    )
+    await ctx.author.send(menu_text)
 
     try:
         pilihan = await bot.wait_for("message", check=dm_check, timeout=60)
         pilihan = pilihan.content.strip().lower()
-
         data = load_autoreply()
 
-        # ── TAMBAH ──
         if pilihan == "tambah":
             await ctx.author.send("✏️ Ketik **trigger** (kata/kalimat pemicu):")
             msg_trigger = await bot.wait_for("message", check=dm_check, timeout=60)
@@ -3884,17 +3888,13 @@ async def autoreply_cmd(ctx):
             save_autoreply(data)
             await ctx.author.send(f"✅ Berhasil ditambahkan!\n\n**Trigger:** `{trigger}`\n**Jawaban:** {jawaban}")
 
-        # ── HAPUS ──
         elif pilihan == "hapus":
             if not data:
                 return await ctx.author.send("❌ Belum ada trigger yang tersimpan.")
-
             list_trigger = "\n".join([f"`{k}`" for k in data.keys()])
             await ctx.author.send(f"🗑️ Trigger yang ada:\n{list_trigger}\n\nKetik trigger yang ingin dihapus:")
-
             msg_hapus = await bot.wait_for("message", check=dm_check, timeout=60)
             hapus_key = msg_hapus.content.strip().lower()
-
             if hapus_key in data:
                 del data[hapus_key]
                 save_autoreply(data)
@@ -3902,16 +3902,13 @@ async def autoreply_cmd(ctx):
             else:
                 await ctx.author.send(f"❌ Trigger `{hapus_key}` tidak ditemukan.")
 
-        # ── LIST ──
         elif pilihan == "list":
             if not data:
                 return await ctx.author.send("❌ Belum ada trigger yang tersimpan.")
-
             lines = []
             for i, (k, v) in enumerate(data.items(), 1):
                 preview = v[:50] + "..." if len(v) > 50 else v
                 lines.append(f"**{i}.** `{k}` → {preview}")
-
             await ctx.author.send("📋 **Daftar Auto Reply:**\n\n" + "\n".join(lines))
 
         elif pilihan == "batal":
@@ -3922,26 +3919,6 @@ async def autoreply_cmd(ctx):
 
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Waktu habis. Ketik `!autoreply` lagi untuk memulai.")
-
-
-# ── EVENT: Auto Reply listener ──────────────────────────
-# Tambahkan ini di dalam on_message yang sudah ada!
-# Cari fungsi on_message di bot kamu, lalu sisipkan kode ini di dalamnya:
-
-# async def on_message(message):
-#     ...kode lain...
-#
-#     # AUTO REPLY
-#     if not message.author.bot and message.guild:
-#         data = load_autoreply()
-#         content_lower = message.content.lower()
-#         for trigger, jawaban in data.items():
-#             if trigger in content_lower:
-#                 await message.channel.send(jawaban)
-#                 break
-#
-#     await bot.process_commands(message)
-
 
 
 bot.run(TOKEN)
