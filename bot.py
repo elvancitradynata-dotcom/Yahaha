@@ -884,7 +884,7 @@ def build_giveaway_embed(gw: dict) -> discord.Embed:
 async def on_ready():
     print(f"✅ {bot.user} online!")
     await bot.change_presence(
-        activity=discord.Activity(type=discord.ActivityType.watching, name="Desa BFL 🏘️")
+        activity=discord.Activity(type=discord.ActivityType.watching, name="WATCHING BFL SERVER")
     )
     bot.add_view(TicketView())
     tickets = load_tickets()
