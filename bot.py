@@ -3813,5 +3813,135 @@ async def absen_cmd(ctx):
             f"{ctx.author.mention} ⏰ Waktu habis! Silakan ketik `!absen` lagi.",
             delete_after=10
         )
+        # ═══════════════════════════════════════════════════════
+#  AUTO REPLY SYSTEM
+# ═══════════════════════════════════════════════════════
+AUTOREPLY_FILE = "autoreply.json"
+
+def load_autoreply():
+    if not os.path.exists(AUTOREPLY_FILE):
+        return {}
+    with open(AUTOREPLY_FILE, "r") as f:
+        return json.load(f)
+
+def save_autoreply(data):
+    with open(AUTOREPLY_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+# ── !autoreply ──────────────────────────────────────────
+@bot.command(name="autoreply", aliases=["ar"])
+async def autoreply_cmd(ctx):
+    """Kelola auto reply via DM. Hanya admin/owner."""
+    if not await is_admin(ctx):
+        return await ctx.send("❌ Hanya admin yang bisa menggunakan perintah ini.", delete_after=5)
+
+    # Harus dijalankan via DM
+    if not isinstance(ctx.channel, discord.DMChannel):
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+        info = await ctx.send("📩 Cek DM kamu ya!", delete_after=5)
+        await ctx.author.send(
+            "📋 **Menu Auto Reply**\n\n"
+            "Ketik salah satu:\n"
+            "`tambah` — Tambah trigger baru\n"
+            "`hapus`  — Hapus trigger\n"
+            "`list`   — Lihat semua trigger\n"
+            "`batal`  — Keluar"
+        )
+    else:
+        await ctx.send(
+            "📋 **Menu Auto Reply**\n\n"
+            "Ketik salah satu:\n"
+            "`tambah` — Tambah trigger baru\n"
+            "`hapus`  — Hapus trigger\n"
+            "`list`   — Lihat semua trigger\n"
+            "`batal`  — Keluar"
+        )
+
+    def dm_check(m):
+        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+    try:
+        pilihan = await bot.wait_for("message", check=dm_check, timeout=60)
+        pilihan = pilihan.content.strip().lower()
+
+        data = load_autoreply()
+
+        # ── TAMBAH ──
+        if pilihan == "tambah":
+            await ctx.author.send("✏️ Ketik **trigger** (kata/kalimat pemicu):")
+            msg_trigger = await bot.wait_for("message", check=dm_check, timeout=60)
+            trigger = msg_trigger.content.strip().lower()
+
+            await ctx.author.send(f"✅ Trigger: `{trigger}`\n\n✏️ Sekarang ketik **jawaban** botnya:")
+            msg_jawaban = await bot.wait_for("message", check=dm_check, timeout=120)
+            jawaban = msg_jawaban.content.strip()
+
+            data[trigger] = jawaban
+            save_autoreply(data)
+            await ctx.author.send(f"✅ Berhasil ditambahkan!\n\n**Trigger:** `{trigger}`\n**Jawaban:** {jawaban}")
+
+        # ── HAPUS ──
+        elif pilihan == "hapus":
+            if not data:
+                return await ctx.author.send("❌ Belum ada trigger yang tersimpan.")
+
+            list_trigger = "\n".join([f"`{k}`" for k in data.keys()])
+            await ctx.author.send(f"🗑️ Trigger yang ada:\n{list_trigger}\n\nKetik trigger yang ingin dihapus:")
+
+            msg_hapus = await bot.wait_for("message", check=dm_check, timeout=60)
+            hapus_key = msg_hapus.content.strip().lower()
+
+            if hapus_key in data:
+                del data[hapus_key]
+                save_autoreply(data)
+                await ctx.author.send(f"✅ Trigger `{hapus_key}` berhasil dihapus!")
+            else:
+                await ctx.author.send(f"❌ Trigger `{hapus_key}` tidak ditemukan.")
+
+        # ── LIST ──
+        elif pilihan == "list":
+            if not data:
+                return await ctx.author.send("❌ Belum ada trigger yang tersimpan.")
+
+            lines = []
+            for i, (k, v) in enumerate(data.items(), 1):
+                preview = v[:50] + "..." if len(v) > 50 else v
+                lines.append(f"**{i}.** `{k}` → {preview}")
+
+            await ctx.author.send("📋 **Daftar Auto Reply:**\n\n" + "\n".join(lines))
+
+        elif pilihan == "batal":
+            await ctx.author.send("❎ Dibatalkan.")
+
+        else:
+            await ctx.author.send("❌ Pilihan tidak valid.")
+
+    except asyncio.TimeoutError:
+        await ctx.author.send("⏰ Waktu habis. Ketik `!autoreply` lagi untuk memulai.")
+
+
+# ── EVENT: Auto Reply listener ──────────────────────────
+# Tambahkan ini di dalam on_message yang sudah ada!
+# Cari fungsi on_message di bot kamu, lalu sisipkan kode ini di dalamnya:
+
+# async def on_message(message):
+#     ...kode lain...
+#
+#     # AUTO REPLY
+#     if not message.author.bot and message.guild:
+#         data = load_autoreply()
+#         content_lower = message.content.lower()
+#         for trigger, jawaban in data.items():
+#             if trigger in content_lower:
+#                 await message.channel.send(jawaban)
+#                 break
+#
+#     await bot.process_commands(message)
+
+
 
 bot.run(TOKEN)
