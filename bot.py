@@ -3727,7 +3727,22 @@ async def listrole_cmd(ctx):
             icon_url=ctx.guild.icon.url if ctx.guild.icon else None
         )
         await ctx.send(embed=embed)
+   
+# ── !cekid ──────────────────────────────────────────────
+@bot.command(name="cekid", aliases=["myid", "idku"])
+async def cekid_cmd(ctx, member: discord.Member = None):
+    """Cek Discord ID dan username. Format: !cekid atau !cekid @user"""
+    target = member or ctx.author
 
+    embed = discord.Embed(
+        title="🆔 Discord ID",
+        color=discord.Color.blurple(),
+        timestamp=datetime.datetime.utcnow()
+    )
+    embed.add_field(name="👤 Username", value=f"`{target}`",    inline=True)
+    embed.add_field(name="🆔 ID",       value=f"`{target.id}`", inline=True)
+    embed.set_thumbnail(url=target.display_avatar.url)
+    await ctx.send(embed=embed)
 
 
 bot.run(TOKEN)
