@@ -884,7 +884,7 @@ def build_giveaway_embed(gw: dict) -> discord.Embed:
 async def on_ready():
     print(f"✅ {bot.user} online!")
     await bot.change_presence(
-        activity=discord.Activity(type=discord.ActivityType.watching, name="Desa BFL 🏘️")
+        activity=discord.Activity(type=discord.ActivityType.watching, name="Watching Server 👀")
     )
     bot.add_view(TicketView())
     tickets = load_tickets()
@@ -904,6 +904,7 @@ async def on_ready():
 
     check_tiktok.start()
     check_giveaways.start()
+    cumer_weekly_reset.start()
     print(f"✅ Semua sistem aktif. Logged in as {bot.user}")
 
 @bot.event
@@ -1776,6 +1777,12 @@ async def help_admin_cmd(ctx):
     embed.add_field(name="👤 Info User",
         value=("`!userinfo [@user]` / `!cekuser` — Cek info lengkap user\n"
                "📌 Menampilkan: kapan join, estimasi pesan, level, XP, Bcash, warn, roles, banner"), inline=False)
+    embed.add_field(name="🔴 Cuci Uang Merah (CUMER)",
+        value=("`!cumer` — Form cuci uang merah (role CUMER atau admin)\n"
+               "`!cumerdashboard` — Dashboard profit & statistik minggu ini\n"
+               "`!cumerhistory` — Kirim history transaksi ke DM (Excel)\n"
+               f"`!cumerreset` — Reset dashboard (admin only)\n"
+               f"📌 Role akses: <@&{CUMER_ROLE_ID}> | Auto reset Senin 00:00 WIB"), inline=False)
     embed.add_field(name="🎵 Music",
         value=("`!play <judul/URL>` — Putar musik dari YouTube\n"
                "`!skip` — Skip lagu sekarang\n"
@@ -3920,5 +3927,550 @@ async def autoreply_cmd(ctx):
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Waktu habis. Ketik `!autoreply` lagi untuk memulai.")
 
+
+# ═══════════════════════════════════════════════════════
+#  SISTEM !CUMER — CUCI UANG MERAH (MONEY LAUNDERING)
+# ═══════════════════════════════════════════════════════
+# Role yang bisa akses fitur ini (selain admin/owner):
+CUMER_ROLE_ID = 1473430775662907607
+
+CUMER_FILE      = "cumer.json"
+CUMER_DASH_FILE = "cumer_dashboard.json"
+
+def load_cumer():         return load_json(CUMER_FILE, default={"records": []})
+def save_cumer(d):        save_json(CUMER_FILE, d)
+def load_cumer_dash():    return load_json(CUMER_DASH_FILE, default={
+    "total_masuk": 0, "total_profit": 0, "total_bersih": 0,
+    "jumlah_transaksi": 0, "reset_at": None
+})
+def save_cumer_dash(d):   save_json(CUMER_DASH_FILE, d)
+
+def has_cumer_access(member) -> bool:
+    if is_admin(member):
+        return True
+    if isinstance(member, discord.Member):
+        for role in member.roles:
+            if role.id == CUMER_ROLE_ID:
+                return True
+    return False
+
+def hitung_cumer(jumlah: int) -> dict:
+    """
+    Rumus cuci uang:
+    1. Potong fee 10% pertama → sisa_1 = jumlah * 0.90
+    2. Dari sisa_1 potong lagi 15% (profit BFL) → bersih = sisa_1 * 0.85
+    Profit BFL total = jumlah - bersih
+    """
+    fee1    = round(jumlah * 0.10)
+    sisa1   = jumlah - fee1
+    fee2    = round(sisa1 * 0.15)
+    bersih  = sisa1 - fee2
+    profit  = jumlah - bersih
+    return {
+        "kotor":        jumlah,
+        "setelah_10":   sisa1,
+        "fee_10":       fee1,
+        "fee_15":       fee2,
+        "bersih":       bersih,
+        "profit_bfl":   profit,
+    }
+
+def generate_cumer_id() -> str:
+    import time
+    return f"CUM-{int(time.time())}"
+
+def _cumer_summary_image(record: dict) -> io.BytesIO:
+    """Buat gambar rangkuman transaksi cuci uang."""
+    W, H = 700, 460
+    img  = Image.new("RGBA", (W, H), (10, 12, 20, 255))
+    draw = ImageDraw.Draw(img)
+
+    # Background gradient gelap merah-hitam
+    for y in range(H):
+        r = int(15 + (y / H) * 25)
+        g = int(5  + (y / H) * 5)
+        b = int(10 + (y / H) * 10)
+        draw.line([(0, y), (W, y)], fill=(r, g, b, 255))
+
+    # Border merah
+    draw.rectangle([4, 4, W-4, H-4], outline=(180, 30, 30), width=3)
+    draw.rectangle([8, 8, W-8, H-8], outline=(80, 10, 10), width=1)
+
+    # Fonts
+    try:
+        f_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+        f_head  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+        f_val   = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",      15)
+        f_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",      13)
+    except Exception:
+        f_title = f_head = f_val = f_small = ImageFont.load_default()
+
+    # Header
+    draw.text((W//2, 28), "🔴 BUKTI CUCI UANG MERAH", font=f_title,
+              fill=(220, 50, 50), anchor="mm")
+    draw.text((W//2, 52), "Asisten Lurah BFL — CUMER System", font=f_small,
+              fill=(140, 140, 140), anchor="mm")
+    draw.line([(20, 65), (W-20, 65)], fill=(100, 20, 20), width=2)
+
+    # Data fields
+    fields = [
+        ("ID Transaksi",    record["id"]),
+        ("Kelompok",        record["kelompok"]),
+        ("Tanggal",         record["tanggal"]),
+        ("Jumlah Kotor",    f"Rp {record['kotor']:,}"),
+        ("Potongan 10%",    f"Rp {record['fee_10']:,}"),
+        ("Sisa Awal",       f"Rp {record['setelah_10']:,}"),
+        ("Potongan 15%",    f"Rp {record['fee_15']:,}  ← Profit BFL"),
+        ("Total Bersih",    f"Rp {record['bersih']:,}"),
+        ("Est. Selesai",    record["estimasi"]),
+    ]
+
+    y_start = 82
+    row_h   = 36
+    col1_x  = 30
+    col2_x  = 270
+
+    for i, (label, value) in enumerate(fields):
+        y = y_start + i * row_h
+        # Alternating row background
+        if i % 2 == 0:
+            draw.rectangle([18, y-2, W-18, y+row_h-4], fill=(20, 8, 8, 180))
+        draw.text((col1_x, y+4), label, font=f_head, fill=(180, 180, 180))
+        draw.text((col2_x, y+4), str(value), font=f_val,
+                  fill=(255, 200, 60) if "Bersih" in label else
+                  (200, 60, 60)       if "Profit" in label or "Potongan" in label else
+                  (255, 255, 255))
+
+    # Footer garis dan keterangan
+    y_footer = y_start + len(fields) * row_h + 10
+    draw.line([(20, y_footer), (W-20, y_footer)], fill=(100, 20, 20), width=2)
+    draw.text((W//2, y_footer + 16),
+              f"Oleh: {record['oleh']}  |  Status: SELESAI DICUCI",
+              font=f_small, fill=(120, 120, 120), anchor="mm")
+    draw.text((W//2, y_footer + 34),
+              "BFL © Money Laundry Services — Rahasia & Terpercaya",
+              font=f_small, fill=(80, 80, 80), anchor="mm")
+
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
+# ── Task reset dashboard setiap Senin 00:00 WIB ────────
+@tasks.loop(minutes=1)
+async def cumer_weekly_reset():
+    now = datetime.datetime.now(WIB)
+    # Reset setiap Senin jam 00:00 WIB
+    if now.weekday() == 0 and now.hour == 0 and now.minute == 0:
+        dash = load_cumer_dash()
+        # Simpan snapshot lama (opsional, bisa dihapus)
+        dash["total_masuk"]        = 0
+        dash["total_profit"]       = 0
+        dash["total_bersih"]       = 0
+        dash["jumlah_transaksi"]   = 0
+        dash["reset_at"]           = now.isoformat()
+        save_cumer_dash(dash)
+        print("[CUMER] Dashboard direset — Senin 00:00 WIB")
+
+@cumer_weekly_reset.before_loop
+async def before_cumer_reset():
+    await bot.wait_until_ready()
+
+
+# ── !cumer — form cuci uang ─────────────────────────────
+@bot.command(name="cumer")
+async def cumer_cmd(ctx):
+    """Form cuci uang merah. Hanya untuk role CUMER atau admin."""
+    # Cek akses
+    if not has_cumer_access(ctx.author):
+        return await ctx.send(
+            "❌ Kamu tidak punya akses fitur **CUMER** (Cuci Uang Merah).\n"
+            f"Butuh role <@&{CUMER_ROLE_ID}> atau status admin.",
+            delete_after=10
+        )
+
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
+
+    msgs_to_delete = [ctx.message]
+
+    async def ask(pertanyaan: str) -> str | None:
+        q = await ctx.send(pertanyaan)
+        msgs_to_delete.append(q)
+        try:
+            jawaban = await bot.wait_for("message", check=check, timeout=120)
+            msgs_to_delete.append(jawaban)
+            return jawaban.content.strip()
+        except asyncio.TimeoutError:
+            return None
+
+    async def cleanup():
+        for m in msgs_to_delete:
+            try:
+                await m.delete()
+                await asyncio.sleep(0.2)
+            except Exception:
+                pass
+
+    # ── Form pengisian ──
+    intro = await ctx.send(
+        "🔴 **SISTEM CUCI UANG MERAH (CUMER)**\n"
+        "Isi form berikut. Ketik `batal` kapan saja untuk membatalkan.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    msgs_to_delete.append(intro)
+
+    # 1. Nama Kelompok
+    kelompok = await ask("📌 **Nama Kelompok** (contoh: Kelompok Satu):")
+    if not kelompok or kelompok.lower() == "batal":
+        await cleanup()
+        return await ctx.send("❌ Dibatalkan.", delete_after=5)
+
+    # 2. Tanggal
+    tanggal = await ask("📅 **Tanggal** transaksi (contoh: 13 Juni 2026):")
+    if not tanggal or tanggal.lower() == "batal":
+        await cleanup()
+        return await ctx.send("❌ Dibatalkan.", delete_after=5)
+
+    # 3. Jumlah
+    while True:
+        jumlah_str = await ask(
+            "💰 **Jumlah Uang Merah** yang akan dicuci (angka saja, contoh: 5000000):"
+        )
+        if not jumlah_str or jumlah_str.lower() == "batal":
+            await cleanup()
+            return await ctx.send("❌ Dibatalkan.", delete_after=5)
+        jumlah_str = jumlah_str.replace(".", "").replace(",", "").replace("rp", "").strip()
+        if jumlah_str.isdigit() and int(jumlah_str) >= 1_000_000:
+            jumlah = int(jumlah_str)
+            break
+        err = await ctx.send(
+            "⚠️ Jumlah tidak valid atau kurang dari Rp 1.000.000. Coba lagi."
+        )
+        msgs_to_delete.append(err)
+
+    # 4. Estimasi selesai
+    estimasi = await ask("⏳ **Estimasi Selesai** (contoh: 3 hari / 14 Juni 2026 jam 18:00):")
+    if not estimasi or estimasi.lower() == "batal":
+        await cleanup()
+        return await ctx.send("❌ Dibatalkan.", delete_after=5)
+
+    # Hitung
+    calc     = hitung_cumer(jumlah)
+    trans_id = generate_cumer_id()
+    now_wib  = datetime.datetime.now(WIB).strftime("%d %b %Y %H:%M WIB")
+
+    record = {
+        "id":          trans_id,
+        "kelompok":    kelompok,
+        "tanggal":     tanggal,
+        "kotor":       jumlah,
+        "fee_10":      calc["fee_10"],
+        "setelah_10":  calc["setelah_10"],
+        "fee_15":      calc["fee_15"],
+        "bersih":      calc["bersih"],
+        "profit_bfl":  calc["profit_bfl"],
+        "estimasi":    estimasi,
+        "oleh":        str(ctx.author),
+        "oleh_id":     str(ctx.author.id),
+        "created_at":  now_wib,
+    }
+
+    # Hapus pesan form
+    await cleanup()
+
+    # ── Embed rangkuman ──
+    embed = discord.Embed(
+        title="🔴 BUKTI CUCI UANG MERAH",
+        description=(
+            f"**ID Transaksi:** `{trans_id}`\n"
+            f"**Kelompok:** {kelompok}\n"
+            f"**Tanggal:** {tanggal}\n"
+            f"**Estimasi Selesai:** {estimasi}"
+        ),
+        color=0xB22222,
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+    embed.add_field(name="💵 Uang Masuk (Kotor)",    value=f"Rp {jumlah:,}",               inline=True)
+    embed.add_field(name="🔻 Potongan Pertama (10%)", value=f"Rp {calc['fee_10']:,}",        inline=True)
+    embed.add_field(name="📉 Sisa Setelah 10%",       value=f"Rp {calc['setelah_10']:,}",    inline=False)
+    embed.add_field(name="🔻 Potongan Kedua (15%)",   value=f"Rp {calc['fee_15']:,}",        inline=True)
+    embed.add_field(name="💰 Profit BFL",             value=f"Rp {calc['profit_bfl']:,}",    inline=True)
+    embed.add_field(
+        name="✅ Total Uang Setelah Dicuci",
+        value=f"**Rp {calc['bersih']:,}**",
+        inline=False
+    )
+    embed.set_footer(
+        text=f"Oleh: {ctx.author.display_name} • {now_wib}",
+        icon_url=ctx.author.display_avatar.url
+    )
+
+    # Generate gambar
+    img_buf  = generate_cumer_image_in_executor = await asyncio.get_event_loop().run_in_executor(
+        None, _cumer_summary_image, record
+    )
+    file     = discord.File(img_buf, filename="bukti_cumer.png")
+    embed.set_image(url="attachment://bukti_cumer.png")
+
+    await ctx.send(embed=embed, file=file)
+
+    # ── Simpan ke history ──
+    data = load_cumer()
+    data["records"].append(record)
+    save_cumer(data)
+
+    # ── Update dashboard ──
+    dash = load_cumer_dash()
+    dash["total_masuk"]      += jumlah
+    dash["total_profit"]     += calc["profit_bfl"]
+    dash["total_bersih"]     += calc["bersih"]
+    dash["jumlah_transaksi"] += 1
+    save_cumer_dash(dash)
+
+    # ── DM gambar ke user ──
+    try:
+        img_buf2 = await asyncio.get_event_loop().run_in_executor(
+            None, _cumer_summary_image, record
+        )
+        file2 = discord.File(img_buf2, filename="bukti_cumer.png")
+        dm_embed = discord.Embed(
+            title="🔴 Bukti Cuci Uang Kamu",
+            description=(
+                f"Transaksi `{trans_id}` berhasil dicatat.\n"
+                f"Simpan gambar ini sebagai bukti."
+            ),
+            color=0xB22222
+        )
+        dm_embed.set_image(url="attachment://bukti_cumer.png")
+        await ctx.author.send(embed=dm_embed, file=file2)
+    except Exception:
+        pass
+
+
+# ── !cumerhistory — kirim history semua data ke DM sebagai Excel ─
+@bot.command(name="cumerhistory", aliases=["cumehistory", "cumerlog"])
+async def cumer_history_cmd(ctx):
+    """Kirim history cuci uang sebagai file Excel ke DM."""
+    if not has_cumer_access(ctx.author):
+        return await ctx.send("❌ Tidak ada akses.", delete_after=8)
+
+    data = load_cumer()
+    records = data.get("records", [])
+
+    if not records:
+        return await ctx.send("❌ Belum ada history cuci uang.", delete_after=8)
+
+    # Buat Excel dengan openpyxl
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return await ctx.send("❌ Library openpyxl tidak tersedia.", delete_after=8)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "History CUMER"
+
+    # Header
+    headers = [
+        "ID Transaksi", "Kelompok", "Tanggal",
+        "Uang Kotor (Rp)", "Fee 10% (Rp)", "Sisa Awal (Rp)",
+        "Fee 15% (Rp)", "Bersih (Rp)", "Profit BFL (Rp)",
+        "Estimasi Selesai", "Oleh", "Dibuat"
+    ]
+    header_fill   = PatternFill("solid", fgColor="B22222")
+    header_font   = Font(bold=True, color="FFFFFF")
+    center_align  = Alignment(horizontal="center", vertical="center")
+
+    for col_idx, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=h)
+        cell.fill   = header_fill
+        cell.font   = header_font
+        cell.alignment = center_align
+
+    # Data rows
+    alt_fill = PatternFill("solid", fgColor="1C0808")
+    for row_idx, r in enumerate(records, 2):
+        row_data = [
+            r.get("id", ""),
+            r.get("kelompok", ""),
+            r.get("tanggal", ""),
+            r.get("kotor", 0),
+            r.get("fee_10", 0),
+            r.get("setelah_10", 0),
+            r.get("fee_15", 0),
+            r.get("bersih", 0),
+            r.get("profit_bfl", 0),
+            r.get("estimasi", ""),
+            r.get("oleh", ""),
+            r.get("created_at", ""),
+        ]
+        for col_idx, val in enumerate(row_data, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+            if row_idx % 2 == 0:
+                cell.fill = alt_fill
+                cell.font = Font(color="EEEEEE")
+            cell.alignment = Alignment(horizontal="center")
+
+    # Auto column width
+    for col in ws.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            try:
+                if cell.value:
+                    max_len = max(max_len, len(str(cell.value)))
+            except Exception:
+                pass
+        ws.column_dimensions[col_letter].width = min(max_len + 4, 40)
+
+    # Save to buffer
+    excel_buf = io.BytesIO()
+    wb.save(excel_buf)
+    excel_buf.seek(0)
+
+    now_str = datetime.datetime.now(WIB).strftime("%Y%m%d_%H%M")
+    filename = f"history_cumer_{now_str}.xlsx"
+
+    try:
+        file = discord.File(excel_buf, filename=filename)
+        embed = discord.Embed(
+            title="📊 History Cuci Uang (CUMER)",
+            description=(
+                f"**Total Transaksi:** {len(records)}\n"
+                f"Data dikirim sebagai file Excel ke DM kamu."
+            ),
+            color=0xB22222
+        )
+        embed.set_footer(text="Asisten Lurah BFL • CUMER System")
+        await ctx.author.send(embed=embed, file=file)
+        await ctx.send("✅ History dikirim ke DM kamu!", delete_after=8)
+    except discord.Forbidden:
+        await ctx.send("❌ Tidak bisa kirim DM ke kamu. Buka DM dulu!", delete_after=10)
+    except Exception as e:
+        await ctx.send(f"❌ Error: `{e}`", delete_after=10)
+
+
+# ── !cumerdashboard — dashboard profit mingguan ─────────
+@bot.command(name="cumerdashboard", aliases=["cumerdash", "cumerstats"])
+async def cumer_dashboard_cmd(ctx):
+    """Tampilkan dashboard profit CUMER minggu ini."""
+    if not has_cumer_access(ctx.author):
+        return await ctx.send("❌ Tidak ada akses.", delete_after=8)
+
+    dash    = load_cumer_dash()
+    data    = load_cumer()
+    records = data.get("records", [])
+
+    # Hitung data minggu ini (sejak reset terakhir)
+    reset_at = dash.get("reset_at")
+    if reset_at:
+        try:
+            reset_dt = datetime.datetime.fromisoformat(reset_at)
+            reset_str = reset_dt.strftime("%d %b %Y %H:%M WIB")
+        except Exception:
+            reset_str = str(reset_at)
+    else:
+        reset_str = "Belum pernah reset"
+
+    now_wib   = datetime.datetime.now(WIB)
+    # Hitung waktu reset berikutnya (Senin 00:00 WIB)
+    days_left = (7 - now_wib.weekday()) % 7
+    if days_left == 0 and (now_wib.hour > 0 or now_wib.minute > 0):
+        days_left = 7
+    next_reset = now_wib + datetime.timedelta(days=days_left)
+    next_reset = next_reset.replace(hour=0, minute=0, second=0, microsecond=0)
+    next_reset_str = next_reset.strftime("%d %b %Y 00:00 WIB")
+
+    # Transaksi terbaru (5 terakhir)
+    last_5 = records[-5:] if len(records) >= 5 else records
+    last_5 = list(reversed(last_5))
+
+    embed = discord.Embed(
+        title="🔴 Dashboard CUMER — Cuci Uang Merah",
+        description=(
+            f"📅 **Periode:** Sejak `{reset_str}`\n"
+            f"🔄 **Reset Berikutnya:** `{next_reset_str}`"
+        ),
+        color=0xB22222,
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+    embed.add_field(
+        name="💵 Total Uang Masuk",
+        value=f"**Rp {dash['total_masuk']:,}**",
+        inline=True
+    )
+    embed.add_field(
+        name="✅ Total Uang Bersih",
+        value=f"**Rp {dash['total_bersih']:,}**",
+        inline=True
+    )
+    embed.add_field(
+        name="💰 Profit BFL",
+        value=f"**Rp {dash['total_profit']:,}**",
+        inline=True
+    )
+    embed.add_field(
+        name="📋 Jumlah Transaksi",
+        value=f"**{dash['jumlah_transaksi']:,}** kali",
+        inline=True
+    )
+
+    # Rata-rata per transaksi
+    if dash["jumlah_transaksi"] > 0:
+        rata = dash["total_masuk"] // dash["jumlah_transaksi"]
+        embed.add_field(
+            name="📊 Rata-rata per Transaksi",
+            value=f"**Rp {rata:,}**",
+            inline=True
+        )
+        margin = (dash["total_profit"] / dash["total_masuk"] * 100) if dash["total_masuk"] > 0 else 0
+        embed.add_field(
+            name="📈 Margin Profit",
+            value=f"**{margin:.1f}%**",
+            inline=True
+        )
+
+    # 5 transaksi terbaru
+    if last_5:
+        lines = []
+        for r in last_5:
+            lines.append(
+                f"• `{r['id']}` **{r['kelompok']}** — "
+                f"Kotor: Rp {r['kotor']:,} → Bersih: Rp {r['bersih']:,}"
+            )
+        embed.add_field(
+            name="🕐 5 Transaksi Terbaru",
+            value="\n".join(lines) if lines else "—",
+            inline=False
+        )
+
+    embed.set_footer(text="Asisten Lurah BFL • CUMER System | Reset tiap Senin 00:00 WIB")
+    await ctx.send(embed=embed)
+
+
+# ── !cumerreset — reset dashboard (admin only) ─────────
+@bot.command(name="cumerreset")
+async def cumer_reset_cmd(ctx):
+    """Reset dashboard CUMER. Hanya admin/owner."""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+
+    dash = load_cumer_dash()
+    dash["total_masuk"]      = 0
+    dash["total_profit"]     = 0
+    dash["total_bersih"]     = 0
+    dash["jumlah_transaksi"] = 0
+    dash["reset_at"]         = datetime.datetime.now(WIB).isoformat()
+    save_cumer_dash(dash)
+
+    await ctx.send(
+        "✅ Dashboard CUMER telah direset oleh "
+        f"{ctx.author.mention}.",
+        delete_after=10
+    )
 
 bot.run(TOKEN)
