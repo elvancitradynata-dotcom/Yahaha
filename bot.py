@@ -38,8 +38,6 @@ AUTOMOD_FILE     = "automod.json"
 WELCOME_CFG_FILE = "welcome_config.json"
 POLLS_FILE       = "polls.json"
 JOIN_TRACKING_FILE = "join_tracking.json"   # tracking kapan user join server
-GACHA_FILE         = "gacha.json"           # inventaris kartu, saldo, tiket, cooldown
-EWALLET_FILE       = "ewallet.json"         # log topup & withdraw
 
 # ═══════════════════════════════════════════════════════
 #  LEVEL CONFIG
@@ -904,7 +902,6 @@ async def on_ready():
 
     check_tiktok.start()
     check_giveaways.start()
-    cumer_weekly_reset.start()
     print(f"✅ Semua sistem aktif. Logged in as {bot.user}")
 
 @bot.event
@@ -1691,13 +1688,8 @@ async def help_cmd(ctx):
         value=("`!poll <menit> <pertanyaan> | <opsi1> | <opsi2>` — Buat poll\n"
                "Contoh: `!poll 10 Warna favorit? | Merah | Biru | Hijau`\n"
                "`!pollresult <id>` — Lihat hasil poll"), inline=False)
-    embed.add_field(name="🎵 Music",
-        value=("`!play <judul/URL>` — Putar musik dari YouTube (harus di voice channel)\n"
-               "`!skip` — Skip lagu\n"
-               "`!stop` / `!dc` — Stop & bot keluar voice\n"
-               "`!pause` / `!resume` — Pause/lanjutkan\n"
-               "`!queue` / `!q` — Lihat antrian lagu\n"
-               "`!nowplaying` / `!np` — Lagu yang sedang diputar"), inline=False)
+    embed.add_field(name="🏓 Ping & Koneksi",
+        value=("`!ping` — Cek latensi bot, ping server Discord, dan status koneksi"), inline=False)
     embed.set_footer(text="Asisten Lurah BFL • Gunakan !helpadmin untuk command admin")
     await ctx.send(embed=embed)
 
@@ -1776,815 +1768,10 @@ async def help_admin_cmd(ctx):
                "`!pollresult <id>` — Lihat hasil poll"), inline=False)
     embed.add_field(name="👤 Info User",
         value=("`!userinfo [@user]` / `!cekuser` — Cek info lengkap user\n"
-               "📌 Menampilkan: kapan join, estimasi pesan, level, XP, Bcash, warn, roles, banner"), inline=False)
-    embed.add_field(name="🔴 Cuci Uang Merah (CUMER)",
-        value=("`!cumer` — Form cuci uang merah (role CUMER atau admin)\n"
-               "`!cumerdashboard` — Dashboard profit & statistik minggu ini\n"
-               "`!cumerhistory` — Kirim history transaksi ke DM (Excel)\n"
-               f"`!cumerreset` — Reset dashboard (admin only)\n"
-               f"📌 Role akses: <@&{CUMER_ROLE_ID}> | Auto reset Senin 00:00 WIB"), inline=False)
-    embed.add_field(name="🎵 Music",
-        value=("`!play <judul/URL>` — Putar musik dari YouTube\n"
-               "`!skip` — Skip lagu sekarang\n"
-               "`!stop` — Stop & bot keluar voice\n"
-               "`!pause` / `!resume` — Pause/lanjutkan musik\n"
-               "`!queue` — Lihat antrian lagu\n"
-               "`!nowplaying` — Lagu yang sedang diputar\n"
-               "📌 Butuh: `pip install yt-dlp` & FFmpeg (sudah aktif di pella.app)"), inline=False)
+               "📌 Menampilkan: kapan join, estimasi pesan, level, XP, warn, roles, banner"), inline=False)
+    embed.add_field(name="🏓 Ping & Koneksi",
+        value=("`!ping` — Cek latensi bot, ping server Discord, dan status koneksi"), inline=False)
     embed.set_footer(text="Asisten Lurah BFL • Hanya terlihat oleh Admin/Owner")
-    await ctx.send(embed=embed)
-
-# ═══════════════════════════════════════════════════════
-#  SISTEM GACHA POKEMON
-# ═══════════════════════════════════════════════════════
-
-def load_gacha():  return load_json(GACHA_FILE, default={})
-def save_gacha(d): save_json(GACHA_FILE, d)
-def load_ewallet():  return load_json(EWALLET_FILE, default=[])
-def save_ewallet(d): save_json(EWALLET_FILE, d)
-
-# ── Daftar Pokemon viral beserta data kartu ──────────────
-# Format: (nama, rarity, harga_idr, emoji, warna_embed, sprite_url)
-# Sprite dari PokeAPI — ukuran kecil (~96px), cocok untuk embed thumbnail
-POKEMON_POOL = [
-    # ── COMMON (harga 0–1000) ──
-    ("Pikachu",     "Common",    500,  "⚡", 0xF6C90E,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/25.png"),
-    ("Eevee",       "Common",    400,  "🦊", 0xC8A26E,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/133.png"),
-    ("Meowth",      "Common",    300,  "🐱", 0xE8D860,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/52.png"),
-    ("Snorlax",     "Common",    600,  "😴", 0x5A6478,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/143.png"),
-    ("Jigglypuff",  "Common",    350,  "🎵", 0xFFAEC9,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/39.png"),
-    ("Psyduck",     "Common",    450,  "🦆", 0xF0D060,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/54.png"),
-    ("Magikarp",    "Common",      0,  "🐟", 0xE85028,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/129.png"),
-    ("Rattata",     "Common",    100,  "🐀", 0x9058A8,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/19.png"),
-    ("Caterpie",    "Common",    150,  "🐛", 0x78C850,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/10.png"),
-    ("Pidgey",      "Common",    200,  "🐦", 0xA8B820,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/16.png"),
-    # ── UNCOMMON (harga 1000–2500) ──
-    ("Bulbasaur",   "Uncommon", 1200, "🌿", 0x78C850,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/1.png"),
-    ("Charmander",  "Uncommon", 1500, "🔥", 0xFF4422,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/4.png"),
-    ("Squirtle",    "Uncommon", 1300, "💧", 0x6890F0,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/7.png"),
-    ("Gengar",      "Uncommon", 2000, "👻", 0x705898,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/94.png"),
-    ("Gyarados",    "Uncommon", 2200, "🐉", 0x6890F0,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/130.png"),
-    ("Lucario",     "Uncommon", 2400, "🥊", 0x4F5FA8,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/448.png"),
-    ("Garchomp",    "Uncommon", 2500, "🦈", 0x7038F8,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/445.png"),
-    # ── RARE (harga 2500–4500) ──
-    ("Charizard",   "Rare",     3500, "🔥", 0xFF7A38,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/6.png"),
-    ("Blastoise",   "Rare",     3200, "💧", 0x6890F0,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/9.png"),
-    ("Venusaur",    "Rare",     3000, "🌿", 0x78C850,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/3.png"),
-    ("Dragonite",   "Rare",     4000, "🐲", 0xFF9B4E,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/149.png"),
-    ("Tyranitar",   "Rare",     4200, "🦖", 0x484038,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/248.png"),
-    ("Alakazam",    "Rare",     3800, "🥄", 0xF8D030,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/65.png"),
-    # ── EPIC (harga 4500–6000) ──
-    ("Umbreon",     "Epic",     5000, "🌑", 0x1C1C2E,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/197.png"),
-    ("Espeon",      "Epic",     5200, "🔮", 0xFF69B4,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/196.png"),
-    ("Sylveon",     "Epic",     5500, "🎀", 0xFFA0C0,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/700.png"),
-    ("Greninja",    "Epic",     5800, "🐸", 0x384038,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/658.png"),
-    ("Zoroark",     "Epic",     5600, "🦊", 0x484848,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/571.png"),
-    # ── LEGENDARY (harga 6000–7000) ──
-    ("Mewtwo",      "Legendary",7000, "👾", 0x9B59B6,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/150.png"),
-    ("Rayquaza",    "Legendary",6800, "🌪️", 0x5A9020,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/384.png"),
-    ("Giratina",    "Legendary",6500, "👁️", 0x6B6B6B,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/487.png"),
-    ("Arceus",      "Legendary",6900, "✨", 0xE8D890,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/493.png"),
-    ("Zacian",      "Legendary",6700, "⚔️", 0x30B8F8,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/888.png"),
-    ("Miraidon",    "Legendary",7000, "⚡", 0x00BFFF,
-     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/1008.png"),
-]
-
-# Bobot rarity untuk pull gacha
-GACHA_WEIGHTS = {
-    "Common":    55,
-    "Uncommon":  25,
-    "Rare":      12,
-    "Epic":       6,
-    "Legendary":  2,
-}
-
-RARITY_COLOR = {
-    "Common":    0x9E9E9E,
-    "Uncommon":  0x4CAF50,
-    "Rare":      0x2196F3,
-    "Epic":      0x9C27B0,
-    "Legendary": 0xFFD700,
-}
-
-RARITY_EMOJI = {
-    "Common":    "⚪",
-    "Uncommon":  "🟢",
-    "Rare":      "🔵",
-    "Epic":      "🟣",
-    "Legendary": "🌟",
-}
-
-GACHA_TICKET_CD_HOURS = 24   # Cooldown claim tiket gratis
-COMMON_TO_TICKET      = 5    # Jumlah kartu Common untuk tukar 1 tiket
-GACHA_IDR_PRICE       = 1000 # Harga !gachaidr (1x pull = 4 kartu)
-GACHA_IDR_CARDS       = 4    # Kartu yang didapat per !gachaidr
-TOPUP_MIN             = 2000
-TOPUP_MAX             = 25000
-WD_MIN                = 15000
-
-# ── Helpers gacha ──────────────────────────────────────
-def _get_gacha_user(gacha: dict, uid: str) -> dict:
-    if uid not in gacha:
-        gacha[uid] = {
-            "saldo": 0,
-            "tiket": 0,
-            "kartu": [],          # list of pokemon names
-            "last_claim": None,   # ISO str
-        }
-    return gacha[uid]
-
-def _pick_pokemon(exclude_rarity=None):
-    """Pilih 1 pokemon berdasarkan bobot rarity."""
-    pool_by_rarity = {}
-    for p in POKEMON_POOL:
-        r = p[1]
-        if r == exclude_rarity:
-            continue
-        pool_by_rarity.setdefault(r, []).append(p)
-    rarities = list(pool_by_rarity.keys())
-    weights  = [GACHA_WEIGHTS[r] for r in rarities]
-    chosen_rarity = random.choices(rarities, weights=weights, k=1)[0]
-    return random.choice(pool_by_rarity[chosen_rarity])
-
-def _pokemon_info(name: str):
-    """Cari data pokemon berdasarkan nama."""
-    for p in POKEMON_POOL:
-        if p[0] == name:
-            return p
-    return None
-
-def _build_card_embed(pokemon_tuple, label="🎴 Kartu Didapat!") -> discord.Embed:
-    name, rarity, harga, emo, color, sprite = pokemon_tuple
-    embed = discord.Embed(
-        title=f"{RARITY_EMOJI[rarity]} **{name}** {emo}",
-        description=(
-            f"**Rarity:** {RARITY_EMOJI[rarity]} {rarity}\n"
-            f"**Harga:** Rp {harga:,}\n"
-        ),
-        color=color,
-    )
-    embed.set_author(name=label)
-    embed.set_thumbnail(url=sprite)
-    embed.set_footer(text="Asisten Lurah BFL • Gacha Pokémon")
-    return embed
-
-def _build_multi_card_embed(cards: list, title="🎴 Hasil Gacha") -> discord.Embed:
-    """Embed ringkasan untuk multi-pull."""
-    lines = []
-    total_val = 0
-    for p in cards:
-        name, rarity, harga, emo, color, sprite = p
-        lines.append(f"{RARITY_EMOJI[rarity]} **{name}** {emo} — Rp {harga:,}")
-        total_val += harga
-    # Warna embed dari kartu terlangka
-    rarity_order = ["Legendary","Epic","Rare","Uncommon","Common"]
-    top_rarity = "Common"
-    for r in rarity_order:
-        if any(p[1] == r for p in cards):
-            top_rarity = r
-            break
-    embed = discord.Embed(
-        title=title,
-        description="\n".join(lines),
-        color=RARITY_COLOR[top_rarity]
-    )
-    embed.add_field(name="💰 Total Nilai", value=f"Rp {total_val:,}", inline=True)
-    embed.set_footer(text="Asisten Lurah BFL • Gacha Pokémon")
-    return embed
-
-# ── !gacha — claim tiket gratis (cooldown 12 jam) ──────
-@bot.command(name="gacha")
-async def gacha_claim(ctx):
-    if not is_game_channel(ctx):
-        return await ctx.send(game_channel_msg(ctx), delete_after=8)
-
-    gacha = load_gacha()
-    uid   = str(ctx.author.id)
-    user  = _get_gacha_user(gacha, uid)
-
-    # Admin bebas claim tanpa cooldown
-    if not is_admin(ctx.author):
-        now = datetime.datetime.now(datetime.timezone.utc)
-        last = user.get("last_claim")
-        if last:
-            last_dt = datetime.datetime.fromisoformat(last)
-            diff    = (now - last_dt).total_seconds()
-            cd_secs = GACHA_TICKET_CD_HOURS * 3600
-            if diff < cd_secs:
-                sisa = int(cd_secs - diff)
-                h, rem = divmod(sisa, 3600)
-                m, s   = divmod(rem, 60)
-                embed = discord.Embed(
-                    title="⏳ Cooldown Gacha Tiket",
-                    description=f"Kamu baru saja klaim! Coba lagi dalam **{h}j {m}m {s}d**.",
-                    color=discord.Color.orange()
-                )
-                embed.set_footer(text="Asisten Lurah BFL • Gacha")
-                return await ctx.send(embed=embed)
-        user["last_claim"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-    user["tiket"] = user.get("tiket", 0) + 1
-    save_gacha(gacha)
-
-    embed = discord.Embed(
-        title="🎟️ Tiket Gacha Diterima!",
-        description=(
-            f"{ctx.author.mention} mendapat **1 Tiket Gacha**!\n\n"
-            f"🎟️ Total tiket kamu: **{user['tiket']}**\n"
-            f"💡 Gunakan `!pakaitiket` untuk pull kartu Pokémon!\n"
-            f"⏰ Klaim berikutnya: **{GACHA_TICKET_CD_HOURS} jam lagi**"
-        ),
-        color=discord.Color.gold()
-    )
-    embed.set_thumbnail(url="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/master-ball.png")
-    embed.set_footer(text="Asisten Lurah BFL • Gacha Pokémon")
-    await ctx.send(embed=embed)
-
-
-# ── !pakaitiket — gunakan tiket untuk pull 1 kartu ─────
-@bot.command(name="pakaitiket", aliases=["useticket","pulltiket"])
-async def pakai_tiket(ctx):
-    if not is_game_channel(ctx):
-        return await ctx.send(game_channel_msg(ctx), delete_after=8)
-
-    gacha = load_gacha()
-    uid   = str(ctx.author.id)
-    user  = _get_gacha_user(gacha, uid)
-
-    if user.get("tiket", 0) < 1:
-        embed = discord.Embed(
-            title="❌ Tiket Tidak Cukup",
-            description="Kamu tidak punya tiket gacha!\n💡 Klaim tiket gratis dengan `!gacha` (cooldown 12 jam)\natau tukar 5 kartu Common dengan `!tukartiket`",
-            color=discord.Color.red()
-        )
-        return await ctx.send(embed=embed)
-
-    user["tiket"] -= 1
-    card = _pick_pokemon()
-    user.setdefault("kartu", []).append(card[0])
-    save_gacha(gacha)
-
-    embed = _build_card_embed(card, label="🎟️ Hasil Pull Tiket!")
-    embed.add_field(name="🎟️ Sisa Tiket", value=str(user["tiket"]), inline=True)
-    await ctx.send(embed=embed)
-
-
-# ── !gachaidr — bayar Rp 1.000 dapat 4 kartu ──────────
-@bot.command(name="gachaidr")
-async def gacha_idr(ctx):
-    if not is_game_channel(ctx):
-        return await ctx.send(game_channel_msg(ctx), delete_after=8)
-
-    gacha = load_gacha()
-    uid   = str(ctx.author.id)
-    user  = _get_gacha_user(gacha, uid)
-
-    # Admin bebas gacha
-    if not is_admin(ctx.author):
-        if user.get("saldo", 0) < GACHA_IDR_PRICE:
-            embed = discord.Embed(
-                title="❌ Saldo Tidak Cukup",
-                description=(
-                    f"Harga `!gachaidr` = **Rp {GACHA_IDR_PRICE:,}** → dapat **{GACHA_IDR_CARDS} kartu**\n\n"
-                    f"💰 Saldo kamu: **Rp {user.get('saldo', 0):,}**\n"
-                    f"📲 Top up dengan: `!topup <jumlah>` (min Rp {TOPUP_MIN:,})"
-                ),
-                color=discord.Color.red()
-            )
-            return await ctx.send(embed=embed)
-        user["saldo"] -= GACHA_IDR_PRICE
-
-    cards = [_pick_pokemon() for _ in range(GACHA_IDR_CARDS)]
-    user.setdefault("kartu", []).extend([c[0] for c in cards])
-    save_gacha(gacha)
-
-    embed = _build_multi_card_embed(cards, title=f"💸 Gacha IDR — {GACHA_IDR_CARDS} Kartu!")
-    if not is_admin(ctx.author):
-        embed.add_field(name="💰 Sisa Saldo", value=f"Rp {user['saldo']:,}", inline=True)
-    await ctx.send(embed=embed)
-
-
-# ── !tukartiket — 5 Common → 1 Tiket ─────────────────
-@bot.command(name="tukartiket", aliases=["exchangeticket"])
-async def tukar_tiket(ctx):
-    if not is_game_channel(ctx):
-        return await ctx.send(game_channel_msg(ctx), delete_after=8)
-
-    gacha = load_gacha()
-    uid   = str(ctx.author.id)
-    user  = _get_gacha_user(gacha, uid)
-
-    kartu  = user.get("kartu", [])
-    common_names = [p[0] for p in POKEMON_POOL if p[1] == "Common"]
-    commons_owned = [c for c in kartu if c in common_names]
-
-    if len(commons_owned) < COMMON_TO_TICKET:
-        embed = discord.Embed(
-            title="❌ Kartu Common Tidak Cukup",
-            description=(
-                f"Butuh **{COMMON_TO_TICKET} kartu Common** untuk tukar 1 tiket.\n"
-                f"Kartu Common kamu: **{len(commons_owned)}**"
-            ),
-            color=discord.Color.red()
-        )
-        return await ctx.send(embed=embed)
-
-    # Hapus 5 common pertama
-    removed = 0
-    new_kartu = []
-    for c in kartu:
-        if c in common_names and removed < COMMON_TO_TICKET:
-            removed += 1
-        else:
-            new_kartu.append(c)
-
-    user["kartu"] = new_kartu
-    user["tiket"] = user.get("tiket", 0) + 1
-    save_gacha(gacha)
-
-    embed = discord.Embed(
-        title="🔄 Tukar Berhasil!",
-        description=(
-            f"**{COMMON_TO_TICKET}x Kartu Common** → **1 Tiket Gacha** 🎟️\n\n"
-            f"🎟️ Total tiket kamu: **{user['tiket']}**"
-        ),
-        color=discord.Color.green()
-    )
-    embed.set_footer(text="Asisten Lurah BFL • Gacha Pokémon")
-    await ctx.send(embed=embed)
-
-
-# ── !giveticket — beri tiket ke user lain ─────────────
-@bot.command(name="giveticket")
-async def give_ticket(ctx, target: discord.Member = None, jumlah: int = 1):
-    if not is_game_channel(ctx):
-        return await ctx.send(game_channel_msg(ctx), delete_after=8)
-    if target is None:
-        return await ctx.send("❌ Format: `!giveticket @user [jumlah]`", delete_after=8)
-    if target.bot:
-        return await ctx.send("❌ Tidak bisa beri tiket ke bot.", delete_after=8)
-    if jumlah < 1:
-        return await ctx.send("❌ Jumlah minimal 1.", delete_after=8)
-    if target.id == ctx.author.id:
-        return await ctx.send("❌ Tidak bisa beri tiket ke diri sendiri.", delete_after=8)
-
-    gacha     = load_gacha()
-    uid_from  = str(ctx.author.id)
-    uid_to    = str(target.id)
-    user_from = _get_gacha_user(gacha, uid_from)
-    user_to   = _get_gacha_user(gacha, uid_to)
-
-    # Admin bebas beri tiket tanpa memotong milik sendiri
-    if not is_admin(ctx.author):
-        if user_from.get("tiket", 0) < jumlah:
-            embed = discord.Embed(
-                title="❌ Tiket Tidak Cukup",
-                description=f"Kamu hanya punya **{user_from.get('tiket',0)} tiket**.",
-                color=discord.Color.red()
-            )
-            return await ctx.send(embed=embed)
-        user_from["tiket"] -= jumlah
-
-    user_to["tiket"] = user_to.get("tiket", 0) + jumlah
-    save_gacha(gacha)
-
-    embed = discord.Embed(
-        title="🎟️ Tiket Dikirim!",
-        description=(
-            f"{ctx.author.mention} memberi **{jumlah} tiket** ke {target.mention}!\n\n"
-            f"🎟️ Tiket {target.display_name}: **{user_to['tiket']}**"
-        ),
-        color=discord.Color.green()
-    )
-    embed.set_footer(text="Asisten Lurah BFL • Gacha Pokémon")
-    await ctx.send(embed=embed)
-
-
-# ── !topup — tambah saldo (simulasi, admin verif manual) ─
-@bot.command(name="topup")
-async def topup_cmd(ctx, jumlah: int = None):
-    if not is_game_channel(ctx):
-        return await ctx.send(game_channel_msg(ctx), delete_after=8)
-    if jumlah is None:
-        embed = discord.Embed(
-            title="📲 Cara Top Up Saldo",
-            description=(
-                f"**Format:** `!topup <jumlah>`\n\n"
-                f"💳 **Min:** Rp {TOPUP_MIN:,} | **Max:** Rp {TOPUP_MAX:,}\n\n"
-                "📌 Setelah command ini, admin akan konfirmasi dan menambahkan saldo secara manual.\n"
-                "📲 Metode: GoPay / OVO / DANA / Transfer Bank\n\n"
-                "📞 Hubungi admin di <#ticket> untuk proses pembayaran."
-            ),
-            color=discord.Color.blue()
-        )
-        embed.set_footer(text="Asisten Lurah BFL • E-Wallet")
-        return await ctx.send(embed=embed)
-
-    if jumlah < TOPUP_MIN or jumlah > TOPUP_MAX:
-        return await ctx.send(
-            f"❌ Jumlah topup harus antara **Rp {TOPUP_MIN:,}** – **Rp {TOPUP_MAX:,}**.",
-            delete_after=10
-        )
-
-    # Log permintaan topup
-    log = load_ewallet()
-    log.append({
-        "type": "topup_request",
-        "user_id": str(ctx.author.id),
-        "user_name": str(ctx.author),
-        "jumlah": jumlah,
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "status": "pending"
-    })
-    save_ewallet(log)
-
-    embed = discord.Embed(
-        title="📲 Permintaan Top Up Diterima",
-        description=(
-            f"**User:** {ctx.author.mention}\n"
-            f"**Jumlah:** Rp {jumlah:,}\n\n"
-            "⏳ Admin akan memproses dalam waktu dekat.\n"
-            "📞 Hubungi admin jika tidak ada konfirmasi dalam 30 menit."
-        ),
-        color=discord.Color.orange()
-    )
-    embed.set_footer(text="Asisten Lurah BFL • E-Wallet | ID: " + str(int(datetime.datetime.now(datetime.timezone.utc).timestamp())))
-    await ctx.send(embed=embed)
-
-
-# ── !wd — tarik saldo ──────────────────────────────────
-@bot.command(name="wd", aliases=["withdraw"])
-async def wd_cmd(ctx, jumlah: int = None):
-    if not is_game_channel(ctx):
-        return await ctx.send(game_channel_msg(ctx), delete_after=8)
-    if jumlah is None:
-        embed = discord.Embed(
-            title="💸 Cara Withdraw Saldo",
-            description=(
-                f"**Format:** `!wd <jumlah>`\n\n"
-                f"💳 **Min WD:** Rp {WD_MIN:,}\n\n"
-                "📌 Admin akan proses setelah konfirmasi.\n"
-                "📲 Metode: GoPay / OVO / DANA / Transfer Bank"
-            ),
-            color=discord.Color.blue()
-        )
-        return await ctx.send(embed=embed)
-
-    if jumlah < WD_MIN:
-        return await ctx.send(f"❌ Minimum withdraw **Rp {WD_MIN:,}**.", delete_after=10)
-
-    gacha = load_gacha()
-    uid   = str(ctx.author.id)
-    user  = _get_gacha_user(gacha, uid)
-
-    if user.get("saldo", 0) < jumlah:
-        return await ctx.send(
-            f"❌ Saldo tidak cukup! Saldo kamu: **Rp {user.get('saldo',0):,}**",
-            delete_after=10
-        )
-
-    # Hold saldo (pending)
-    user["saldo"] -= jumlah
-    save_gacha(gacha)
-
-    log = load_ewallet()
-    log.append({
-        "type": "wd_request",
-        "user_id": str(ctx.author.id),
-        "user_name": str(ctx.author),
-        "jumlah": jumlah,
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "status": "pending"
-    })
-    save_ewallet(log)
-
-    embed = discord.Embed(
-        title="💸 Permintaan Withdraw Diterima",
-        description=(
-            f"**User:** {ctx.author.mention}\n"
-            f"**Jumlah:** Rp {jumlah:,}\n\n"
-            f"💰 Sisa saldo kamu: **Rp {user['saldo']:,}**\n"
-            "⏳ Admin akan memproses dalam waktu dekat."
-        ),
-        color=discord.Color.orange()
-    )
-    embed.set_footer(text="Asisten Lurah BFL • E-Wallet")
-    await ctx.send(embed=embed)
-
-
-# ── !addsaldo — admin tambah saldo manual ─────────────
-@bot.command(name="addsaldo")
-async def add_saldo(ctx, target: discord.Member = None, jumlah: int = None):
-    if not is_admin(ctx.author):
-        return await ctx.send("❌ Hanya admin yang bisa menggunakan command ini.", delete_after=5)
-    if target is None or jumlah is None:
-        return await ctx.send("❌ Format: `!addsaldo @user <jumlah>`", delete_after=8)
-
-    gacha = load_gacha()
-    uid   = str(target.id)
-    user  = _get_gacha_user(gacha, uid)
-    user["saldo"] = user.get("saldo", 0) + jumlah
-    save_gacha(gacha)
-
-    embed = discord.Embed(
-        title="✅ Saldo Ditambahkan",
-        description=(
-            f"**User:** {target.mention}\n"
-            f"**Ditambahkan:** Rp {jumlah:,}\n"
-            f"**Saldo Baru:** Rp {user['saldo']:,}"
-        ),
-        color=discord.Color.green()
-    )
-    embed.set_footer(text=f"Oleh: {ctx.author.display_name}")
-    await ctx.send(embed=embed)
-    try:
-        await target.send(
-            f"💰 Saldo kamu ditambahkan **Rp {jumlah:,}** oleh admin!\n"
-            f"Total saldo: **Rp {user['saldo']:,}**"
-        )
-    except Exception:
-        pass
-
-
-# ── !saldo — cek saldo & tiket ────────────────────────
-@bot.command(name="saldo", aliases=["wallet","dompet"])
-async def cek_saldo(ctx, target: discord.Member = None):
-    if not is_game_channel(ctx):
-        return await ctx.send(game_channel_msg(ctx), delete_after=8)
-
-    # Admin bisa cek saldo orang lain
-    if target and is_admin(ctx.author):
-        member = target
-    else:
-        member = ctx.author
-
-    gacha = load_gacha()
-    uid   = str(member.id)
-    user  = _get_gacha_user(gacha, uid)
-
-    now = datetime.datetime.now(datetime.timezone.utc)
-    last = user.get("last_claim")
-    if last:
-        last_dt = datetime.datetime.fromisoformat(last)
-        diff    = (now - last_dt).total_seconds()
-        cd_secs = GACHA_TICKET_CD_HOURS * 3600
-        if diff < cd_secs:
-            sisa = int(cd_secs - diff)
-            h, rem = divmod(sisa, 3600)
-            m, s   = divmod(rem, 60)
-            cd_str = f"⏳ {h}j {m}m {s}d lagi"
-        else:
-            cd_str = "✅ Siap klaim!"
-    else:
-        cd_str = "✅ Belum pernah klaim"
-
-    total_kartu = len(user.get("kartu", []))
-    embed = discord.Embed(
-        title=f"👛 Dompet — {member.display_name}",
-        color=discord.Color.gold()
-    )
-    embed.add_field(name="💰 Saldo",        value=f"Rp {user.get('saldo', 0):,}", inline=True)
-    embed.add_field(name="🎟️ Tiket",        value=str(user.get("tiket", 0)),       inline=True)
-    embed.add_field(name="🃏 Total Kartu",  value=str(total_kartu),                inline=True)
-    embed.add_field(name="⏰ Gacha Tiket",  value=cd_str,                          inline=False)
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text="Asisten Lurah BFL • Gacha Pokémon")
-    await ctx.send(embed=embed)
-
-
-# ── !inventory — lihat koleksi kartu ─────────────────
-@bot.command(name="inventory", aliases=["inv","koleksi","kartu"])
-async def inventory_cmd(ctx, target: discord.Member = None, page: int = 1):
-    if not is_game_channel(ctx):
-        return await ctx.send(game_channel_msg(ctx), delete_after=8)
-
-    member = target or ctx.author
-    gacha  = load_gacha()
-    uid    = str(member.id)
-    user   = _get_gacha_user(gacha, uid)
-    kartu  = user.get("kartu", [])
-
-    if not kartu:
-        embed = discord.Embed(
-            title=f"🃏 Inventory — {member.display_name}",
-            description="Belum punya kartu! Gunakan `!gacha` atau `!gachaidr` untuk dapat kartu.",
-            color=discord.Color.greyple()
-        )
-        return await ctx.send(embed=embed)
-
-    # Hitung jumlah per kartu
-    count_map = {}
-    for c in kartu:
-        count_map[c] = count_map.get(c, 0) + 1
-
-    # Urutkan: Legendary > Epic > Rare > Uncommon > Common
-    rarity_rank = {"Legendary": 0, "Epic": 1, "Rare": 2, "Uncommon": 3, "Common": 4}
-    sorted_cards = sorted(
-        count_map.items(),
-        key=lambda x: (rarity_rank.get((_pokemon_info(x[0]) or [None,"Common"])[1], 5), x[0])
-    )
-
-    # Pagination 10 kartu per halaman
-    per_page   = 10
-    total_page = math.ceil(len(sorted_cards) / per_page)
-    page       = max(1, min(page, total_page))
-    start      = (page - 1) * per_page
-    page_cards = sorted_cards[start:start + per_page]
-
-    lines = []
-    for name, qty in page_cards:
-        info = _pokemon_info(name)
-        if info:
-            _, rarity, harga, emo, _, sprite = info
-            lines.append(
-                f"{RARITY_EMOJI[rarity]} **{name}** {emo} ×{qty} — Rp {harga:,}"
-            )
-        else:
-            lines.append(f"❓ **{name}** ×{qty}")
-
-    # Hitung nilai total
-    total_val = sum(
-        (_pokemon_info(n)[2] if _pokemon_info(n) else 0) * q
-        for n, q in count_map.items()
-    )
-
-    embed = discord.Embed(
-        title=f"🃏 Inventory — {member.display_name}",
-        description="\n".join(lines),
-        color=discord.Color.blurple()
-    )
-    embed.add_field(name="🃏 Total Kartu",  value=str(len(kartu)),      inline=True)
-    embed.add_field(name="🎴 Jenis Unik",   value=str(len(count_map)),  inline=True)
-    embed.add_field(name="💰 Total Nilai",  value=f"Rp {total_val:,}",  inline=True)
-    embed.set_footer(text=f"Halaman {page}/{total_page} • !inventory [hal] | Asisten Lurah BFL")
-    embed.set_thumbnail(url=member.display_avatar.url)
-    await ctx.send(embed=embed)
-
-
-# ── !cekkartu — detail 1 kartu + gambar ──────────────
-@bot.command(name="cekkartu", aliases=["cardinfo"])
-async def cek_kartu(ctx, *, nama: str = None):
-    if not is_game_channel(ctx):
-        return await ctx.send(game_channel_msg(ctx), delete_after=8)
-    if not nama:
-        return await ctx.send("❌ Format: `!cekkartu <nama pokemon>`", delete_after=8)
-
-    info = _pokemon_info(nama.title())
-    if not info:
-        # Coba case-insensitive
-        nama_low = nama.lower()
-        for p in POKEMON_POOL:
-            if p[0].lower() == nama_low:
-                info = p
-                break
-    if not info:
-        return await ctx.send(f"❌ Kartu **{nama}** tidak ditemukan di pool.", delete_after=8)
-
-    name, rarity, harga, emo, color, sprite = info
-    embed = discord.Embed(
-        title=f"{RARITY_EMOJI[rarity]} {name} {emo}",
-        description=(
-            f"**Rarity:** {RARITY_EMOJI[rarity]} {rarity}\n"
-            f"**Harga Kartu:** Rp {harga:,}\n"
-            f"**Drop Rate:** {GACHA_WEIGHTS[rarity]}%\n"
-        ),
-        color=color
-    )
-    embed.set_image(url=sprite)   # gambar lebih besar di cekkartu
-    embed.set_footer(text="Asisten Lurah BFL • Gacha Pokémon")
-    await ctx.send(embed=embed)
-
-
-# ── !daftarkartu — lihat semua kartu di pool ─────────
-@bot.command(name="daftarkartu", aliases=["cardlist","poolkartu"])
-async def daftar_kartu(ctx, rarity_filter: str = None):
-    if not is_game_channel(ctx):
-        return await ctx.send(game_channel_msg(ctx), delete_after=8)
-
-    rarities = ["Common","Uncommon","Rare","Epic","Legendary"]
-    if rarity_filter:
-        rf = rarity_filter.title()
-        if rf not in rarities:
-            return await ctx.send(f"❌ Rarity tidak valid. Pilih: {', '.join(rarities)}", delete_after=8)
-        pool = [p for p in POKEMON_POOL if p[1] == rf]
-        title = f"🃏 Daftar Kartu — {rf}"
-        color = RARITY_COLOR[rf]
-    else:
-        pool  = POKEMON_POOL
-        title = "🃏 Semua Kartu di Pool Gacha"
-        color = discord.Color.gold().value
-
-    lines_by_rarity = {r: [] for r in rarities}
-    for p in pool:
-        name, rarity, harga, emo, _, sprite = p
-        lines_by_rarity[rarity].append(f"{emo} **{name}** — Rp {harga:,}")
-
-    embed = discord.Embed(title=title, color=color)
-    for r in rarities:
-        if lines_by_rarity[r]:
-            embed.add_field(
-                name=f"{RARITY_EMOJI[r]} {r} ({GACHA_WEIGHTS[r]}%)",
-                value="\n".join(lines_by_rarity[r]),
-                inline=True
-            )
-    embed.set_footer(text="Asisten Lurah BFL • Gacha Pokémon | !cekkartu <nama> untuk detail + gambar")
-    await ctx.send(embed=embed)
-
-
-# ── Tambahkan gacha ke !help ──────────────────────────
-# (help_cmd sudah ada, kita patch dengan tambahan field di atas send)
-# Biarkan help_cmd yang sudah ada, hanya tambah !helpgacha
-
-@bot.command(name="helpgacha", aliases=["gachahelp","infogacha"])
-async def help_gacha_cmd(ctx):
-    embed = discord.Embed(
-        title="🎴 Gacha Pokémon — Panduan Lengkap",
-        description="Kumpulkan kartu Pokémon viral dari Common sampai Legendary!",
-        color=discord.Color.gold()
-    )
-    embed.add_field(
-        name="🎟️ Sistem Tiket",
-        value=(
-            "`!gacha` — Klaim 1 tiket gratis (cooldown **12 jam**)\n"
-            "`!pakaitiket` — Gunakan 1 tiket → dapat 1 kartu acak\n"
-            "`!tukartiket` — 5 kartu Common → 1 tiket\n"
-            "`!giveticket @user [n]` — Kirim tiket ke user lain"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="💸 Gacha Berbayar",
-        value=(
-            f"`!gachaidr` — Bayar **Rp {GACHA_IDR_PRICE:,}** → dapat **{GACHA_IDR_CARDS} kartu**\n"
-            f"Min topup: Rp {TOPUP_MIN:,} | Max: Rp {TOPUP_MAX:,}\n"
-            f"Min WD: Rp {WD_MIN:,}"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="💰 Saldo & E-Wallet",
-        value=(
-            "`!saldo [@user]` — Cek saldo & tiket\n"
-            "`!topup <jumlah>` — Request top up (admin proses)\n"
-            "`!wd <jumlah>` — Request withdraw"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="🃏 Koleksi Kartu",
-        value=(
-            "`!inventory [@user] [hal]` — Lihat koleksi kartu\n"
-            "`!cekkartu <nama>` — Detail kartu + gambar besar\n"
-            "`!daftarkartu [rarity]` — Lihat semua kartu di pool"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="🌟 Rarity & Drop Rate",
-        value=(
-            "⚪ Common (55%) — Rp 0–1.000\n"
-            "🟢 Uncommon (25%) — Rp 1.000–2.500\n"
-            "🔵 Rare (12%) — Rp 2.500–4.500\n"
-            "🟣 Epic (6%) — Rp 4.500–6.000\n"
-            "🌟 Legendary (2%) — Rp 6.000–7.000"
-        ),
-        inline=False
-    )
-    embed.set_thumbnail(url="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/master-ball.png")
-    embed.set_footer(text="Asisten Lurah BFL • Gacha Pokémon | Admin: !addsaldo @user <jumlah>")
     await ctx.send(embed=embed)
 
 
@@ -3928,549 +3115,366 @@ async def autoreply_cmd(ctx):
         await ctx.author.send("⏰ Waktu habis. Ketik `!autoreply` lagi untuk memulai.")
 
 
+
 # ═══════════════════════════════════════════════════════
-#  SISTEM !CUMER — CUCI UANG MERAH (MONEY LAUNDERING)
+#  !PING — CEK LATENCY, PING, DAN STATUS KONEKSI
 # ═══════════════════════════════════════════════════════
-# Role yang bisa akses fitur ini (selain admin/owner):
-CUMER_ROLE_ID = 1473430775662907607
-
-CUMER_FILE      = "cumer.json"
-CUMER_DASH_FILE = "cumer_dashboard.json"
-
-def load_cumer():         return load_json(CUMER_FILE, default={"records": []})
-def save_cumer(d):        save_json(CUMER_FILE, d)
-def load_cumer_dash():    return load_json(CUMER_DASH_FILE, default={
-    "total_masuk": 0, "total_profit": 0, "total_bersih": 0,
-    "jumlah_transaksi": 0, "reset_at": None
-})
-def save_cumer_dash(d):   save_json(CUMER_DASH_FILE, d)
-
-def has_cumer_access(member) -> bool:
-    if is_admin(member):
-        return True
-    if isinstance(member, discord.Member):
-        for role in member.roles:
-            if role.id == CUMER_ROLE_ID:
-                return True
-    return False
-
-def hitung_cumer(jumlah: int) -> dict:
-    """
-    Rumus cuci uang:
-    1. Potong fee 10% pertama → sisa_1 = jumlah * 0.90
-    2. Dari sisa_1 potong lagi 15% (profit BFL) → bersih = sisa_1 * 0.85
-    Profit BFL total = jumlah - bersih
-    """
-    fee1    = round(jumlah * 0.10)
-    sisa1   = jumlah - fee1
-    fee2    = round(sisa1 * 0.15)
-    bersih  = sisa1 - fee2
-    profit  = jumlah - bersih
-    return {
-        "kotor":        jumlah,
-        "setelah_10":   sisa1,
-        "fee_10":       fee1,
-        "fee_15":       fee2,
-        "bersih":       bersih,
-        "profit_bfl":   profit,
-    }
-
-def generate_cumer_id() -> str:
+@bot.command(name="ping", aliases=["latency", "speed"])
+async def ping_cmd(ctx):
+    """Cek latensi bot, WebSocket ping, dan waktu respons API Discord."""
     import time
-    return f"CUM-{int(time.time())}"
 
-def _cumer_summary_image(record: dict) -> io.BytesIO:
-    """Buat gambar rangkuman transaksi cuci uang."""
-    W, H = 700, 460
-    img  = Image.new("RGBA", (W, H), (10, 12, 20, 255))
-    draw = ImageDraw.Draw(img)
+    # Kirim pesan awal untuk ukur round-trip
+    start = time.perf_counter()
+    msg = await ctx.send("🏓 Mengukur ping...")
+    end = time.perf_counter()
 
-    # Background gradient gelap merah-hitam
-    for y in range(H):
-        r = int(15 + (y / H) * 25)
-        g = int(5  + (y / H) * 5)
-        b = int(10 + (y / H) * 10)
-        draw.line([(0, y), (W, y)], fill=(r, g, b, 255))
+    api_latency_ms   = round((end - start) * 1000, 2)
+    ws_latency_ms    = round(bot.latency * 1000, 2)
 
-    # Border merah
-    draw.rectangle([4, 4, W-4, H-4], outline=(180, 30, 30), width=3)
-    draw.rectangle([8, 8, W-8, H-8], outline=(80, 10, 10), width=1)
+    # Klasifikasi kualitas ping
+    def ping_quality(ms):
+        if ms < 80:
+            return "🟢 Sangat Baik"
+        elif ms < 150:
+            return "🟡 Baik"
+        elif ms < 300:
+            return "🟠 Sedang"
+        else:
+            return "🔴 Lambat"
 
-    # Fonts
-    try:
-        f_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
-        f_head  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-        f_val   = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",      15)
-        f_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",      13)
-    except Exception:
-        f_title = f_head = f_val = f_small = ImageFont.load_default()
+    ws_quality  = ping_quality(ws_latency_ms)
+    api_quality = ping_quality(api_latency_ms)
 
-    # Header
-    draw.text((W//2, 28), "🔴 BUKTI CUCI UANG MERAH", font=f_title,
-              fill=(220, 50, 50), anchor="mm")
-    draw.text((W//2, 52), "Asisten Lurah BFL — CUMER System", font=f_small,
-              fill=(140, 140, 140), anchor="mm")
-    draw.line([(20, 65), (W-20, 65)], fill=(100, 20, 20), width=2)
+    now_wib = datetime.datetime.now(WIB).strftime("%H:%M:%S WIB")
 
-    # Data fields
-    fields = [
-        ("ID Transaksi",    record["id"]),
-        ("Kelompok",        record["kelompok"]),
-        ("Tanggal",         record["tanggal"]),
-        ("Jumlah Kotor",    f"Rp {record['kotor']:,}"),
-        ("Potongan 10%",    f"Rp {record['fee_10']:,}"),
-        ("Sisa Awal",       f"Rp {record['setelah_10']:,}"),
-        ("Potongan 15%",    f"Rp {record['fee_15']:,}  ← Profit BFL"),
-        ("Total Bersih",    f"Rp {record['bersih']:,}"),
-        ("Est. Selesai",    record["estimasi"]),
-    ]
-
-    y_start = 82
-    row_h   = 36
-    col1_x  = 30
-    col2_x  = 270
-
-    for i, (label, value) in enumerate(fields):
-        y = y_start + i * row_h
-        # Alternating row background
-        if i % 2 == 0:
-            draw.rectangle([18, y-2, W-18, y+row_h-4], fill=(20, 8, 8, 180))
-        draw.text((col1_x, y+4), label, font=f_head, fill=(180, 180, 180))
-        draw.text((col2_x, y+4), str(value), font=f_val,
-                  fill=(255, 200, 60) if "Bersih" in label else
-                  (200, 60, 60)       if "Profit" in label or "Potongan" in label else
-                  (255, 255, 255))
-
-    # Footer garis dan keterangan
-    y_footer = y_start + len(fields) * row_h + 10
-    draw.line([(20, y_footer), (W-20, y_footer)], fill=(100, 20, 20), width=2)
-    draw.text((W//2, y_footer + 16),
-              f"Oleh: {record['oleh']}  |  Status: SELESAI DICUCI",
-              font=f_small, fill=(120, 120, 120), anchor="mm")
-    draw.text((W//2, y_footer + 34),
-              "BFL © Money Laundry Services — Rahasia & Terpercaya",
-              font=f_small, fill=(80, 80, 80), anchor="mm")
-
-    buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="PNG")
-    buf.seek(0)
-    return buf
-
-
-# ── Task reset dashboard setiap Senin 00:00 WIB ────────
-@tasks.loop(minutes=1)
-async def cumer_weekly_reset():
-    now = datetime.datetime.now(WIB)
-    # Reset setiap Senin jam 00:00 WIB
-    if now.weekday() == 0 and now.hour == 0 and now.minute == 0:
-        dash = load_cumer_dash()
-        # Simpan snapshot lama (opsional, bisa dihapus)
-        dash["total_masuk"]        = 0
-        dash["total_profit"]       = 0
-        dash["total_bersih"]       = 0
-        dash["jumlah_transaksi"]   = 0
-        dash["reset_at"]           = now.isoformat()
-        save_cumer_dash(dash)
-        print("[CUMER] Dashboard direset — Senin 00:00 WIB")
-
-@cumer_weekly_reset.before_loop
-async def before_cumer_reset():
-    await bot.wait_until_ready()
-
-
-# ── !cumer — form cuci uang ─────────────────────────────
-@bot.command(name="cumer")
-async def cumer_cmd(ctx):
-    """Form cuci uang merah. Hanya untuk role CUMER atau admin."""
-    # Cek akses
-    if not has_cumer_access(ctx.author):
-        return await ctx.send(
-            "❌ Kamu tidak punya akses fitur **CUMER** (Cuci Uang Merah).\n"
-            f"Butuh role <@&{CUMER_ROLE_ID}> atau status admin.",
-            delete_after=10
-        )
-
-    def check(m):
-        return m.author == ctx.author and m.channel == ctx.channel
-
-    msgs_to_delete = [ctx.message]
-
-    async def ask(pertanyaan: str) -> str | None:
-        q = await ctx.send(pertanyaan)
-        msgs_to_delete.append(q)
-        try:
-            jawaban = await bot.wait_for("message", check=check, timeout=120)
-            msgs_to_delete.append(jawaban)
-            return jawaban.content.strip()
-        except asyncio.TimeoutError:
-            return None
-
-    async def cleanup():
-        for m in msgs_to_delete:
-            try:
-                await m.delete()
-                await asyncio.sleep(0.2)
-            except Exception:
-                pass
-
-    # ── Form pengisian ──
-    intro = await ctx.send(
-        "🔴 **SISTEM CUCI UANG MERAH (CUMER)**\n"
-        "Isi form berikut. Ketik `batal` kapan saja untuk membatalkan.\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    )
-    msgs_to_delete.append(intro)
-
-    # 1. Nama Kelompok
-    kelompok = await ask("📌 **Nama Kelompok** (contoh: Kelompok Satu):")
-    if not kelompok or kelompok.lower() == "batal":
-        await cleanup()
-        return await ctx.send("❌ Dibatalkan.", delete_after=5)
-
-    # 2. Tanggal
-    tanggal = await ask("📅 **Tanggal** transaksi (contoh: 13 Juni 2026):")
-    if not tanggal or tanggal.lower() == "batal":
-        await cleanup()
-        return await ctx.send("❌ Dibatalkan.", delete_after=5)
-
-    # 3. Jumlah
-    while True:
-        jumlah_str = await ask(
-            "💰 **Jumlah Uang Merah** yang akan dicuci (angka saja, contoh: 5000000):"
-        )
-        if not jumlah_str or jumlah_str.lower() == "batal":
-            await cleanup()
-            return await ctx.send("❌ Dibatalkan.", delete_after=5)
-        jumlah_str = jumlah_str.replace(".", "").replace(",", "").replace("rp", "").strip()
-        if jumlah_str.isdigit() and int(jumlah_str) >= 1_000_000:
-            jumlah = int(jumlah_str)
-            break
-        err = await ctx.send(
-            "⚠️ Jumlah tidak valid atau kurang dari Rp 1.000.000. Coba lagi."
-        )
-        msgs_to_delete.append(err)
-
-    # 4. Estimasi selesai
-    estimasi = await ask("⏳ **Estimasi Selesai** (contoh: 3 hari / 14 Juni 2026 jam 18:00):")
-    if not estimasi or estimasi.lower() == "batal":
-        await cleanup()
-        return await ctx.send("❌ Dibatalkan.", delete_after=5)
-
-    # Hitung
-    calc     = hitung_cumer(jumlah)
-    trans_id = generate_cumer_id()
-    now_wib  = datetime.datetime.now(WIB).strftime("%d %b %Y %H:%M WIB")
-
-    record = {
-        "id":          trans_id,
-        "kelompok":    kelompok,
-        "tanggal":     tanggal,
-        "kotor":       jumlah,
-        "fee_10":      calc["fee_10"],
-        "setelah_10":  calc["setelah_10"],
-        "fee_15":      calc["fee_15"],
-        "bersih":      calc["bersih"],
-        "profit_bfl":  calc["profit_bfl"],
-        "estimasi":    estimasi,
-        "oleh":        str(ctx.author),
-        "oleh_id":     str(ctx.author.id),
-        "created_at":  now_wib,
-    }
-
-    # Hapus pesan form
-    await cleanup()
-
-    # ── Embed rangkuman ──
     embed = discord.Embed(
-        title="🔴 BUKTI CUCI UANG MERAH",
-        description=(
-            f"**ID Transaksi:** `{trans_id}`\n"
-            f"**Kelompok:** {kelompok}\n"
-            f"**Tanggal:** {tanggal}\n"
-            f"**Estimasi Selesai:** {estimasi}"
-        ),
-        color=0xB22222,
+        title="🏓 Pong! — Status Koneksi Bot",
+        color=discord.Color.green() if ws_latency_ms < 150 else discord.Color.orange(),
         timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
-    embed.add_field(name="💵 Uang Masuk (Kotor)",    value=f"Rp {jumlah:,}",               inline=True)
-    embed.add_field(name="🔻 Potongan Pertama (10%)", value=f"Rp {calc['fee_10']:,}",        inline=True)
-    embed.add_field(name="📉 Sisa Setelah 10%",       value=f"Rp {calc['setelah_10']:,}",    inline=False)
-    embed.add_field(name="🔻 Potongan Kedua (15%)",   value=f"Rp {calc['fee_15']:,}",        inline=True)
-    embed.add_field(name="💰 Profit BFL",             value=f"Rp {calc['profit_bfl']:,}",    inline=True)
     embed.add_field(
-        name="✅ Total Uang Setelah Dicuci",
-        value=f"**Rp {calc['bersih']:,}**",
+        name="📡 WebSocket Latency (Ping)",
+        value=f"**{ws_latency_ms} ms** — {ws_quality}",
         inline=False
     )
-    embed.set_footer(
-        text=f"Oleh: {ctx.author.display_name} • {now_wib}",
-        icon_url=ctx.author.display_avatar.url
+    embed.add_field(
+        name="⚡ API Response Time",
+        value=f"**{api_latency_ms} ms** — {api_quality}",
+        inline=False
     )
-
-    # Generate gambar
-    img_buf  = generate_cumer_image_in_executor = await asyncio.get_event_loop().run_in_executor(
-        None, _cumer_summary_image, record
+    embed.add_field(
+        name="🕐 Waktu Server",
+        value=f"`{now_wib}`",
+        inline=True
     )
-    file     = discord.File(img_buf, filename="bukti_cumer.png")
-    embed.set_image(url="attachment://bukti_cumer.png")
-
-    await ctx.send(embed=embed, file=file)
-
-    # ── Simpan ke history ──
-    data = load_cumer()
-    data["records"].append(record)
-    save_cumer(data)
-
-    # ── Update dashboard ──
-    dash = load_cumer_dash()
-    dash["total_masuk"]      += jumlah
-    dash["total_profit"]     += calc["profit_bfl"]
-    dash["total_bersih"]     += calc["bersih"]
-    dash["jumlah_transaksi"] += 1
-    save_cumer_dash(dash)
-
-    # ── DM gambar ke user ──
-    try:
-        img_buf2 = await asyncio.get_event_loop().run_in_executor(
-            None, _cumer_summary_image, record
-        )
-        file2 = discord.File(img_buf2, filename="bukti_cumer.png")
-        dm_embed = discord.Embed(
-            title="🔴 Bukti Cuci Uang Kamu",
-            description=(
-                f"Transaksi `{trans_id}` berhasil dicatat.\n"
-                f"Simpan gambar ini sebagai bukti."
-            ),
-            color=0xB22222
-        )
-        dm_embed.set_image(url="attachment://bukti_cumer.png")
-        await ctx.author.send(embed=dm_embed, file=file2)
-    except Exception:
-        pass
+    embed.add_field(
+        name="🌐 Status Discord API",
+        value="🟢 Online" if ws_latency_ms < 500 else "🔴 Bermasalah",
+        inline=True
+    )
+    embed.set_footer(text=f"Diminta oleh {ctx.author.display_name} • Asisten Lurah BFL")
+    await msg.edit(content=None, embed=embed)
 
 
-# ── !cumerhistory — kirim history semua data ke DM sebagai Excel ─
-@bot.command(name="cumerhistory", aliases=["cumehistory", "cumerlog"])
-async def cumer_history_cmd(ctx):
-    """Kirim history cuci uang sebagai file Excel ke DM."""
-    if not has_cumer_access(ctx.author):
-        return await ctx.send("❌ Tidak ada akses.", delete_after=8)
+# ═══════════════════════════════════════════════════════
+#  FITUR TAMBAHAN 1 — !SERVERINFO
+#  Tampilkan info lengkap server
+# ═══════════════════════════════════════════════════════
+@bot.command(name="serverinfo", aliases=["server", "sinfo"])
+@commands.guild_only()
+async def serverinfo_cmd(ctx):
+    """Tampilkan informasi lengkap tentang server ini."""
+    guild = ctx.guild
 
-    data = load_cumer()
-    records = data.get("records", [])
+    # Hitung statistik member
+    total       = guild.member_count
+    bots        = sum(1 for m in guild.members if m.bot)
+    humans      = total - bots
+    online      = sum(1 for m in guild.members if m.status != discord.Status.offline and not m.bot)
 
-    if not records:
-        return await ctx.send("❌ Belum ada history cuci uang.", delete_after=8)
+    # Hitung channel
+    text_ch  = len(guild.text_channels)
+    voice_ch = len(guild.voice_channels)
+    cat_ch   = len(guild.categories)
 
-    # Buat Excel dengan openpyxl
-    try:
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        from openpyxl.utils import get_column_letter
-    except ImportError:
-        return await ctx.send("❌ Library openpyxl tidak tersedia.", delete_after=8)
+    created_ts = int(guild.created_at.timestamp())
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "History CUMER"
-
-    # Header
-    headers = [
-        "ID Transaksi", "Kelompok", "Tanggal",
-        "Uang Kotor (Rp)", "Fee 10% (Rp)", "Sisa Awal (Rp)",
-        "Fee 15% (Rp)", "Bersih (Rp)", "Profit BFL (Rp)",
-        "Estimasi Selesai", "Oleh", "Dibuat"
-    ]
-    header_fill   = PatternFill("solid", fgColor="B22222")
-    header_font   = Font(bold=True, color="FFFFFF")
-    center_align  = Alignment(horizontal="center", vertical="center")
-
-    for col_idx, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_idx, value=h)
-        cell.fill   = header_fill
-        cell.font   = header_font
-        cell.alignment = center_align
-
-    # Data rows
-    alt_fill = PatternFill("solid", fgColor="1C0808")
-    for row_idx, r in enumerate(records, 2):
-        row_data = [
-            r.get("id", ""),
-            r.get("kelompok", ""),
-            r.get("tanggal", ""),
-            r.get("kotor", 0),
-            r.get("fee_10", 0),
-            r.get("setelah_10", 0),
-            r.get("fee_15", 0),
-            r.get("bersih", 0),
-            r.get("profit_bfl", 0),
-            r.get("estimasi", ""),
-            r.get("oleh", ""),
-            r.get("created_at", ""),
-        ]
-        for col_idx, val in enumerate(row_data, 1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=val)
-            if row_idx % 2 == 0:
-                cell.fill = alt_fill
-                cell.font = Font(color="EEEEEE")
-            cell.alignment = Alignment(horizontal="center")
-
-    # Auto column width
-    for col in ws.columns:
-        max_len = 0
-        col_letter = get_column_letter(col[0].column)
-        for cell in col:
-            try:
-                if cell.value:
-                    max_len = max(max_len, len(str(cell.value)))
-            except Exception:
-                pass
-        ws.column_dimensions[col_letter].width = min(max_len + 4, 40)
-
-    # Save to buffer
-    excel_buf = io.BytesIO()
-    wb.save(excel_buf)
-    excel_buf.seek(0)
-
-    now_str = datetime.datetime.now(WIB).strftime("%Y%m%d_%H%M")
-    filename = f"history_cumer_{now_str}.xlsx"
-
-    try:
-        file = discord.File(excel_buf, filename=filename)
-        embed = discord.Embed(
-            title="📊 History Cuci Uang (CUMER)",
-            description=(
-                f"**Total Transaksi:** {len(records)}\n"
-                f"Data dikirim sebagai file Excel ke DM kamu."
-            ),
-            color=0xB22222
-        )
-        embed.set_footer(text="Asisten Lurah BFL • CUMER System")
-        await ctx.author.send(embed=embed, file=file)
-        await ctx.send("✅ History dikirim ke DM kamu!", delete_after=8)
-    except discord.Forbidden:
-        await ctx.send("❌ Tidak bisa kirim DM ke kamu. Buka DM dulu!", delete_after=10)
-    except Exception as e:
-        await ctx.send(f"❌ Error: `{e}`", delete_after=10)
-
-
-# ── !cumerdashboard — dashboard profit mingguan ─────────
-@bot.command(name="cumerdashboard", aliases=["cumerdash", "cumerstats"])
-async def cumer_dashboard_cmd(ctx):
-    """Tampilkan dashboard profit CUMER minggu ini."""
-    if not has_cumer_access(ctx.author):
-        return await ctx.send("❌ Tidak ada akses.", delete_after=8)
-
-    dash    = load_cumer_dash()
-    data    = load_cumer()
-    records = data.get("records", [])
-
-    # Hitung data minggu ini (sejak reset terakhir)
-    reset_at = dash.get("reset_at")
-    if reset_at:
-        try:
-            reset_dt = datetime.datetime.fromisoformat(reset_at)
-            reset_str = reset_dt.strftime("%d %b %Y %H:%M WIB")
-        except Exception:
-            reset_str = str(reset_at)
-    else:
-        reset_str = "Belum pernah reset"
-
-    now_wib   = datetime.datetime.now(WIB)
-    # Hitung waktu reset berikutnya (Senin 00:00 WIB)
-    days_left = (7 - now_wib.weekday()) % 7
-    if days_left == 0 and (now_wib.hour > 0 or now_wib.minute > 0):
-        days_left = 7
-    next_reset = now_wib + datetime.timedelta(days=days_left)
-    next_reset = next_reset.replace(hour=0, minute=0, second=0, microsecond=0)
-    next_reset_str = next_reset.strftime("%d %b %Y 00:00 WIB")
-
-    # Transaksi terbaru (5 terakhir)
-    last_5 = records[-5:] if len(records) >= 5 else records
-    last_5 = list(reversed(last_5))
+    boost_level = guild.premium_tier
+    boosts      = guild.premium_subscription_count or 0
 
     embed = discord.Embed(
-        title="🔴 Dashboard CUMER — Cuci Uang Merah",
-        description=(
-            f"📅 **Periode:** Sejak `{reset_str}`\n"
-            f"🔄 **Reset Berikutnya:** `{next_reset_str}`"
-        ),
-        color=0xB22222,
+        title=f"🏰 {guild.name}",
+        description=guild.description or "Tidak ada deskripsi.",
+        color=discord.Color.from_rgb(88, 101, 242),
         timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
-    embed.add_field(
-        name="💵 Total Uang Masuk",
-        value=f"**Rp {dash['total_masuk']:,}**",
-        inline=True
-    )
-    embed.add_field(
-        name="✅ Total Uang Bersih",
-        value=f"**Rp {dash['total_bersih']:,}**",
-        inline=True
-    )
-    embed.add_field(
-        name="💰 Profit BFL",
-        value=f"**Rp {dash['total_profit']:,}**",
-        inline=True
-    )
-    embed.add_field(
-        name="📋 Jumlah Transaksi",
-        value=f"**{dash['jumlah_transaksi']:,}** kali",
-        inline=True
-    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    if guild.banner:
+        embed.set_image(url=guild.banner.url)
 
-    # Rata-rata per transaksi
-    if dash["jumlah_transaksi"] > 0:
-        rata = dash["total_masuk"] // dash["jumlah_transaksi"]
-        embed.add_field(
-            name="📊 Rata-rata per Transaksi",
-            value=f"**Rp {rata:,}**",
-            inline=True
-        )
-        margin = (dash["total_profit"] / dash["total_masuk"] * 100) if dash["total_masuk"] > 0 else 0
-        embed.add_field(
-            name="📈 Margin Profit",
-            value=f"**{margin:.1f}%**",
-            inline=True
-        )
-
-    # 5 transaksi terbaru
-    if last_5:
-        lines = []
-        for r in last_5:
-            lines.append(
-                f"• `{r['id']}` **{r['kelompok']}** — "
-                f"Kotor: Rp {r['kotor']:,} → Bersih: Rp {r['bersih']:,}"
-            )
-        embed.add_field(
-            name="🕐 5 Transaksi Terbaru",
-            value="\n".join(lines) if lines else "—",
-            inline=False
-        )
-
-    embed.set_footer(text="Asisten Lurah BFL • CUMER System | Reset tiap Senin 00:00 WIB")
+    embed.add_field(name="🆔 Server ID",      value=f"`{guild.id}`",              inline=True)
+    embed.add_field(name="👑 Owner",           value=f"{guild.owner.mention}",     inline=True)
+    embed.add_field(name="📅 Dibuat",          value=f"<t:{created_ts}:F>",        inline=True)
+    embed.add_field(name="👥 Total Member",    value=f"**{humans}** orang + **{bots}** bot", inline=True)
+    embed.add_field(name="🟢 Online Sekarang", value=f"**{online}** orang",        inline=True)
+    embed.add_field(name="🎭 Total Role",      value=f"**{len(guild.roles)-1}** role", inline=True)
+    embed.add_field(name="💬 Channel Teks",    value=str(text_ch),                 inline=True)
+    embed.add_field(name="🔊 Channel Voice",   value=str(voice_ch),                inline=True)
+    embed.add_field(name="📁 Kategori",        value=str(cat_ch),                  inline=True)
+    embed.add_field(
+        name="🚀 Boost Server",
+        value=f"Level **{boost_level}** · **{boosts}** boost",
+        inline=True
+    )
+    embed.add_field(
+        name="🌍 Region / Verifikasi",
+        value=f"`{str(guild.verification_level).title()}`",
+        inline=True
+    )
+    embed.set_footer(
+        text=f"Diminta oleh {ctx.author.display_name} • Asisten Lurah BFL",
+        icon_url=ctx.author.display_avatar.url
+    )
     await ctx.send(embed=embed)
 
 
-# ── !cumerreset — reset dashboard (admin only) ─────────
-@bot.command(name="cumerreset")
-async def cumer_reset_cmd(ctx):
-    """Reset dashboard CUMER. Hanya admin/owner."""
-    if not is_admin(ctx.author):
-        return await ctx.send("❌ Hanya admin.", delete_after=5)
+# ═══════════════════════════════════════════════════════
+#  FITUR TAMBAHAN 2 — !AVATAR
+#  Tampilkan avatar user dalam ukuran besar
+# ═══════════════════════════════════════════════════════
+@bot.command(name="avatar", aliases=["av", "pp", "foto"])
+async def avatar_cmd(ctx, member: discord.Member = None):
+    """Tampilkan avatar user dalam ukuran penuh.
+    Gunakan: !avatar atau !avatar @user
+    """
+    target = member or ctx.author
+    formats = []
+    base_url = str(target.display_avatar.url)
 
-    dash = load_cumer_dash()
-    dash["total_masuk"]      = 0
-    dash["total_profit"]     = 0
-    dash["total_bersih"]     = 0
-    dash["jumlah_transaksi"] = 0
-    dash["reset_at"]         = datetime.datetime.now(WIB).isoformat()
-    save_cumer_dash(dash)
+    # Buat link berbagai format
+    for fmt in ["png", "jpg", "webp"]:
+        url = target.display_avatar.with_format(fmt).with_size(1024).url
+        formats.append(f"[{fmt.upper()}]({url})")
+    if target.display_avatar.is_animated():
+        gif_url = target.display_avatar.with_format("gif").with_size(1024).url
+        formats.append(f"[GIF]({gif_url})")
 
-    await ctx.send(
-        "✅ Dashboard CUMER telah direset oleh "
-        f"{ctx.author.mention}.",
-        delete_after=10
+    embed = discord.Embed(
+        title=f"🖼️ Avatar — {target.display_name}",
+        description=" • ".join(formats),
+        color=discord.Color.blurple(),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
+    embed.set_image(url=target.display_avatar.with_size(1024).url)
+    embed.set_footer(
+        text=f"Diminta oleh {ctx.author.display_name} • Asisten Lurah BFL",
+        icon_url=ctx.author.display_avatar.url
+    )
+    await ctx.send(embed=embed)
+
+
+# ═══════════════════════════════════════════════════════
+#  FITUR TAMBAHAN 3 — !SNIPE
+#  Tampilkan pesan terakhir yang dihapus di channel
+# ═══════════════════════════════════════════════════════
+_snipe_cache: dict = {}  # channel_id -> {"content", "author", "created_at"}
+
+@bot.event
+async def on_message_delete(message):
+    """Cache pesan yang dihapus untuk !snipe."""
+    if message.author.bot or not message.content:
+        return
+    _snipe_cache[message.channel.id] = {
+        "content":    message.content,
+        "author":     message.author,
+        "created_at": message.created_at,
+        "avatar_url": message.author.display_avatar.url,
+    }
+
+@bot.command(name="snipe", aliases=["sn"])
+@commands.guild_only()
+async def snipe_cmd(ctx):
+    """Tampilkan pesan terakhir yang dihapus di channel ini."""
+    data = _snipe_cache.get(ctx.channel.id)
+    if not data:
+        return await ctx.send("🕵️ Tidak ada pesan terhapus yang tercache di channel ini.", delete_after=8)
+
+    deleted_ts = int(data["created_at"].timestamp())
+    embed = discord.Embed(
+        description=data["content"][:4096],
+        color=discord.Color.red(),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+    embed.set_author(
+        name=f"{data['author'].display_name} ({data['author']})",
+        icon_url=data["avatar_url"]
+    )
+    embed.set_footer(text=f"Dikirim <t:{deleted_ts}:R> • Asisten Lurah BFL | !snipe")
+    await ctx.send(embed=embed)
+
+
+# ═══════════════════════════════════════════════════════
+#  FITUR TAMBAHAN 4 — !COINFLIP & !DADU
+#  Mini-game ringan tanpa ekonomi
+# ═══════════════════════════════════════════════════════
+@bot.command(name="coinflip", aliases=["flip", "koin"])
+async def coinflip_cmd(ctx, pilihan: str = None):
+    """Lempar koin! Tebak: heads atau tails.
+    Gunakan: !coinflip heads  atau  !coinflip tails
+    """
+    hasil   = random.choice(["heads", "tails"])
+    emoji   = "🪙"
+    h_emoji = "👑" if hasil == "heads" else "🔵"
+
+    if pilihan:
+        pilihan = pilihan.lower().strip()
+        alias_map = {"h": "heads", "t": "tails", "kepala": "heads", "ekor": "tails"}
+        pilihan = alias_map.get(pilihan, pilihan)
+
+        if pilihan not in ("heads", "tails"):
+            return await ctx.send("❌ Pilih `heads` (kepala) atau `tails` (ekor).", delete_after=8)
+
+        menang = pilihan == hasil
+        color  = discord.Color.green() if menang else discord.Color.red()
+        status = "✅ MENANG!" if menang else "❌ KALAH!"
+
+        embed = discord.Embed(
+            title=f"{emoji} Coin Flip!",
+            description=(
+                f"Kamu pilih: **{pilihan.title()}**\n"
+                f"Hasilnya: {h_emoji} **{hasil.title()}**\n\n"
+                f"**{status}**"
+            ),
+            color=color
+        )
+    else:
+        embed = discord.Embed(
+            title=f"{emoji} Coin Flip!",
+            description=f"Hasilnya: {h_emoji} **{hasil.title()}**",
+            color=discord.Color.gold()
+        )
+
+    embed.set_footer(text=f"{ctx.author.display_name} • Asisten Lurah BFL")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="dadu", aliases=["dice", "roll"])
+async def dadu_cmd(ctx, sisi: int = 6):
+    """Lempar dadu. Default 6 sisi, bisa custom.
+    Gunakan: !dadu  atau  !dadu 20  (untuk d20)
+    """
+    if sisi < 2 or sisi > 1000:
+        return await ctx.send("❌ Sisi dadu harus antara 2–1000.", delete_after=8)
+
+    hasil = random.randint(1, sisi)
+    is_max = hasil == sisi
+    is_min = hasil == 1
+
+    color = discord.Color.gold() if is_max else (discord.Color.red() if is_min else discord.Color.blurple())
+    note  = " 🎉 CRITICAL HIT!" if is_max else (" 💀 CRITICAL FAIL!" if is_min else "")
+
+    embed = discord.Embed(
+        title=f"🎲 Dadu d{sisi}",
+        description=f"**{ctx.author.display_name}** melempar dadu **d{sisi}**...\n\n🎲 Hasil: **{hasil}**{note}",
+        color=color
+    )
+    embed.set_footer(text="Asisten Lurah BFL • !dadu [sisi]")
+    await ctx.send(embed=embed)
+
+
+# ═══════════════════════════════════════════════════════
+#  FITUR TAMBAHAN 5 — !REMINDER
+#  Set reminder pribadi dengan waktu custom
+# ═══════════════════════════════════════════════════════
+@bot.command(name="reminder", aliases=["remind", "ingatkan"])
+async def reminder_cmd(ctx, waktu: str = None, *, pesan: str = "Waktunya!"):
+    """Set reminder untuk dirimu sendiri.
+    Format waktu: 10s, 5m, 2h, 1d
+    Contoh: !reminder 30m Makan siang
+            !reminder 2h Meeting BFL
+    """
+    if waktu is None:
+        embed = discord.Embed(
+            title="⏰ Cara Pakai !reminder",
+            description=(
+                "**Format:** `!reminder <waktu> <pesan>`\n\n"
+                "**Contoh:**\n"
+                "`!reminder 30m Makan siang`\n"
+                "`!reminder 2h Meeting BFL`\n"
+                "`!reminder 1d Bayar iuran`\n\n"
+                "**Satuan waktu:**\n"
+                "`s` = detik | `m` = menit | `h` = jam | `d` = hari\n"
+                "⏳ Maksimal: **7 hari**"
+            ),
+            color=discord.Color.blue()
+        )
+        return await ctx.send(embed=embed, delete_after=20)
+
+    # Parse durasi
+    total_seconds = 0
+    patterns = [("d", 86400), ("h", 3600), ("m", 60), ("s", 1)]
+    for suffix, mult in patterns:
+        match = re.search(r"(\d+)" + suffix, waktu.lower())
+        if match:
+            total_seconds += int(match.group(1)) * mult
+
+    if total_seconds <= 0:
+        return await ctx.send("❌ Format waktu salah. Contoh: `30m`, `2h`, `1d`", delete_after=8)
+
+    MAX_SECONDS = 7 * 86400
+    if total_seconds > MAX_SECONDS:
+        return await ctx.send("❌ Maksimal reminder adalah **7 hari**.", delete_after=8)
+
+    # Format waktu display
+    days, rem  = divmod(total_seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins, secs = divmod(rem, 60)
+    parts = []
+    if days:  parts.append(f"{days}h")
+    if hours: parts.append(f"{hours}j")
+    if mins:  parts.append(f"{mins}m")
+    if secs:  parts.append(f"{secs}d")
+    dur_str = " ".join(parts)
+
+    fire_ts = int((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=total_seconds)).timestamp())
+
+    confirm_embed = discord.Embed(
+        title="⏰ Reminder Diset!",
+        description=(
+            f"✅ Kamu akan diingatkan dalam **{dur_str}**\n"
+            f"📌 Pesan: **{pesan}**\n"
+            f"🕐 Waktunya: <t:{fire_ts}:F> (<t:{fire_ts}:R>)"
+        ),
+        color=discord.Color.green()
+    )
+    confirm_embed.set_footer(text=f"{ctx.author.display_name} • Asisten Lurah BFL")
+    await ctx.send(embed=confirm_embed)
+
+    # Tunggu lalu kirim DM
+    await asyncio.sleep(total_seconds)
+
+    try:
+        remind_embed = discord.Embed(
+            title="⏰ REMINDER!",
+            description=(
+                f"Hei {ctx.author.mention}, ini pengingatmu!\n\n"
+                f"📌 **{pesan}**"
+            ),
+            color=discord.Color.gold(),
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        remind_embed.set_footer(text="Asisten Lurah BFL • Reminder System")
+        await ctx.author.send(embed=remind_embed)
+
+        # Juga kirim di channel asal jika masih bisa
+        try:
+            await ctx.send(f"⏰ {ctx.author.mention} **Reminder:** {pesan}", delete_after=30)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
 
 bot.run(TOKEN)
