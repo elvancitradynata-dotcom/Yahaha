@@ -3117,34 +3117,47 @@ async def autoreply_cmd(ctx):
 
 
 # ═══════════════════════════════════════════════════════
-#  !PING — CEK LATENCY, PING, DAN STATUS KONEKSI
+#  !PING — CEK LATENCY, PING, DAN KECEPATAN INTERNET
 # ═══════════════════════════════════════════════════════
 @bot.command(name="ping", aliases=["latency", "speed"])
 async def ping_cmd(ctx):
-    """Cek latensi bot, WebSocket ping, dan waktu respons API Discord."""
-    import time
+    """Cek latensi bot, WebSocket ping, dan kecepatan internet server (KB/s)."""
+    import time, urllib.request
 
-    # Kirim pesan awal untuk ukur round-trip
-    start = time.perf_counter()
-    msg = await ctx.send("🏓 Mengukur ping...")
-    end = time.perf_counter()
+    msg = await ctx.send("🏓 Mengukur ping & kecepatan internet...")
 
-    api_latency_ms   = round((end - start) * 1000, 2)
-    ws_latency_ms    = round(bot.latency * 1000, 2)
+    ws_latency_ms = round(bot.latency * 1000, 2)
+
+    # Ukur kecepatan download dari file kecil Discord CDN (~100KB)
+    TEST_URL = "https://cdn.discordapp.com/attachments/placeholder"
+    # Gunakan file publik kecil dari Cloudflare sebagai benchmark
+    SPEED_URL = "https://speed.cloudflare.com/__down?bytes=102400"  # 100 KB
+    try:
+        spd_start = time.perf_counter()
+        req = urllib.request.urlopen(SPEED_URL, timeout=10)
+        data = req.read()
+        spd_end = time.perf_counter()
+        elapsed = spd_end - spd_start
+        bytes_downloaded = len(data)
+        speed_kbps = round(bytes_downloaded / elapsed / 1024, 2)  # KB/s
+        speed_str = f"**{speed_kbps} KB/s**"
+        speed_quality = (
+            "🟢 Sangat Cepat" if speed_kbps > 5000 else
+            "🟡 Cepat"        if speed_kbps > 1000 else
+            "🟠 Sedang"       if speed_kbps > 300  else
+            "🔴 Lambat"
+        )
+    except Exception:
+        speed_str    = "**Gagal diukur**"
+        speed_quality = "⚠️ Timeout / Error"
 
     # Klasifikasi kualitas ping
-    def ping_quality(ms):
-        if ms < 80:
-            return "🟢 Sangat Baik"
-        elif ms < 150:
-            return "🟡 Baik"
-        elif ms < 300:
-            return "🟠 Sedang"
-        else:
-            return "🔴 Lambat"
-
-    ws_quality  = ping_quality(ws_latency_ms)
-    api_quality = ping_quality(api_latency_ms)
+    ping_quality = (
+        "🟢 Sangat Baik" if ws_latency_ms < 80  else
+        "🟡 Baik"        if ws_latency_ms < 150 else
+        "🟠 Sedang"      if ws_latency_ms < 300 else
+        "🔴 Lambat"
+    )
 
     now_wib = datetime.datetime.now(WIB).strftime("%H:%M:%S WIB")
 
@@ -3155,22 +3168,17 @@ async def ping_cmd(ctx):
     )
     embed.add_field(
         name="📡 WebSocket Latency (Ping)",
-        value=f"**{ws_latency_ms} ms** — {ws_quality}",
+        value=f"**{ws_latency_ms} ms** — {ping_quality}",
         inline=False
     )
     embed.add_field(
-        name="⚡ API Response Time",
-        value=f"**{api_latency_ms} ms** — {api_quality}",
+        name="🚀 Kecepatan Internet Server",
+        value=f"{speed_str} — {speed_quality}",
         inline=False
     )
     embed.add_field(
         name="🕐 Waktu Server",
         value=f"`{now_wib}`",
-        inline=True
-    )
-    embed.add_field(
-        name="🌐 Status Discord API",
-        value="🟢 Online" if ws_latency_ms < 500 else "🔴 Bermasalah",
         inline=True
     )
     embed.set_footer(text=f"Diminta oleh {ctx.author.display_name} • Asisten Lurah BFL")
@@ -3246,9 +3254,11 @@ async def serverinfo_cmd(ctx):
 # ═══════════════════════════════════════════════════════
 @bot.command(name="avatar", aliases=["av", "pp", "foto"])
 async def avatar_cmd(ctx, member: discord.Member = None):
-    """Tampilkan avatar user dalam ukuran penuh.
+    """Tampilkan avatar user dalam ukuran penuh. (Admin only)
     Gunakan: !avatar atau !avatar @user
     """
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Command ini hanya untuk **Admin / Owner**.", delete_after=8)
     target = member or ctx.author
     formats = []
     base_url = str(target.display_avatar.url)
@@ -3475,6 +3485,193 @@ async def reminder_cmd(ctx, waktu: str = None, *, pesan: str = "Waktunya!"):
             pass
     except Exception:
         pass
+
+
+# ═══════════════════════════════════════════════════════
+#  SISTEM !LISTCASE — DAFTAR CASE / AGENDA PEMBAHASAN
+# ═══════════════════════════════════════════════════════
+CASE_FILE = "listcase.json"
+
+def load_cases() -> list:
+    if os.path.exists(CASE_FILE):
+        with open(CASE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+def save_cases(data: list):
+    with open(CASE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+STATUS_EMOJI = {
+    "pending":  "🔴",
+    "proses":   "🟡",
+    "selesai":  "🟢",
+}
+
+@bot.command(name="listcase", aliases=["case", "addcase", "daftarcase"])
+async def listcase_cmd(ctx, subcommand: str = None, *, args: str = None):
+    """Sistem daftar case / agenda pembahasan.
+
+    Subcommand:
+      !listcase                   — Lihat semua case
+      !listcase add <judul>       — Tambah case baru (admin)
+      !listcase done <id>         — Tandai selesai (admin)
+      !listcase proses <id>       — Tandai sedang diproses (admin)
+      !listcase hapus <id>        — Hapus case (admin)
+      !listcase info <id>         — Detail satu case
+    """
+    cases = load_cases()
+
+    # ── LIHAT SEMUA CASE ─────────────────────────────
+    if subcommand is None or subcommand.lower() == "list":
+        if not cases:
+            return await ctx.send("📋 Belum ada case yang terdaftar. Tambah dengan `!listcase add <judul>`")
+
+        pending  = [c for c in cases if c["status"] == "pending"]
+        proses   = [c for c in cases if c["status"] == "proses"]
+        selesai  = [c for c in cases if c["status"] == "selesai"]
+
+        embed = discord.Embed(
+            title="📋 Daftar Case BFL",
+            color=discord.Color.from_rgb(88, 101, 242),
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        embed.set_footer(text=f"Total: {len(cases)} case • Asisten Lurah BFL")
+
+        def fmt_list(lst):
+            lines = []
+            for c in lst:
+                ts   = f"<t:{c['created_ts']}:d>"
+                by   = c.get("added_by", "?")
+                lines.append(f"`#{c['id']}` **{c['title']}**\n　 📅 {ts} · oleh {by}")
+            return "\n".join(lines) if lines else "_Tidak ada_"
+
+        if pending:
+            embed.add_field(name=f"🔴 Belum Dibahas ({len(pending)})",  value=fmt_list(pending),  inline=False)
+        if proses:
+            embed.add_field(name=f"🟡 Sedang Diproses ({len(proses)})", value=fmt_list(proses),   inline=False)
+        if selesai:
+            embed.add_field(name=f"🟢 Sudah Selesai ({len(selesai)})",  value=fmt_list(selesai),  inline=False)
+
+        return await ctx.send(embed=embed)
+
+    sub = subcommand.lower()
+
+    # ── TAMBAH CASE ──────────────────────────────────
+    if sub in ("add", "tambah", "baru"):
+        if not is_admin(ctx.author):
+            return await ctx.send("❌ Hanya **Admin / Owner** yang bisa menambah case.", delete_after=8)
+        if not args:
+            return await ctx.send("❌ Tulis judul case-nya. Contoh: `!listcase add Laporan pencurian motor`", delete_after=10)
+
+        new_id = (max((c["id"] for c in cases), default=0)) + 1
+        now_ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        entry  = {
+            "id":         new_id,
+            "title":      args.strip(),
+            "status":     "pending",
+            "created_ts": now_ts,
+            "added_by":   ctx.author.display_name,
+            "note":       ""
+        }
+        cases.append(entry)
+        save_cases(cases)
+
+        embed = discord.Embed(
+            title="✅ Case Ditambahkan!",
+            description=(
+                f"**ID:** `#{new_id}`\n"
+                f"**Judul:** {entry['title']}\n"
+                f"**Status:** 🔴 Belum Dibahas\n"
+                f"**Ditambah oleh:** {ctx.author.mention}"
+            ),
+            color=discord.Color.green(),
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        embed.set_footer(text="Asisten Lurah BFL • !listcase")
+        return await ctx.send(embed=embed)
+
+    # ── UBAH STATUS ──────────────────────────────────
+    if sub in ("done", "selesai", "proses", "process"):
+        if not is_admin(ctx.author):
+            return await ctx.send("❌ Hanya **Admin / Owner** yang bisa mengubah status.", delete_after=8)
+        if not args or not args.strip().isdigit():
+            return await ctx.send("❌ Masukkan ID case. Contoh: `!listcase done 3`", delete_after=8)
+
+        case_id    = int(args.strip())
+        new_status = "selesai" if sub in ("done", "selesai") else "proses"
+        target     = next((c for c in cases if c["id"] == case_id), None)
+
+        if not target:
+            return await ctx.send(f"❌ Case `#{case_id}` tidak ditemukan.", delete_after=8)
+
+        old_status    = target["status"]
+        target["status"] = new_status
+        save_cases(cases)
+
+        s_emoji = STATUS_EMOJI[new_status]
+        embed   = discord.Embed(
+            title=f"{s_emoji} Status Case #{case_id} Diperbarui",
+            description=(
+                f"**Judul:** {target['title']}\n"
+                f"**Status lama:** {STATUS_EMOJI.get(old_status, '❓')} `{old_status.title()}`\n"
+                f"**Status baru:** {s_emoji} `{new_status.title()}`\n"
+                f"**Diubah oleh:** {ctx.author.mention}"
+            ),
+            color=discord.Color.green() if new_status == "selesai" else discord.Color.yellow(),
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        embed.set_footer(text="Asisten Lurah BFL • !listcase")
+        return await ctx.send(embed=embed)
+
+    # ── HAPUS CASE ───────────────────────────────────
+    if sub in ("hapus", "delete", "del", "remove"):
+        if not is_admin(ctx.author):
+            return await ctx.send("❌ Hanya **Admin / Owner** yang bisa menghapus case.", delete_after=8)
+        if not args or not args.strip().isdigit():
+            return await ctx.send("❌ Masukkan ID case. Contoh: `!listcase hapus 3`", delete_after=8)
+
+        case_id = int(args.strip())
+        target  = next((c for c in cases if c["id"] == case_id), None)
+        if not target:
+            return await ctx.send(f"❌ Case `#{case_id}` tidak ditemukan.", delete_after=8)
+
+        cases.remove(target)
+        save_cases(cases)
+        return await ctx.send(f"🗑️ Case `#{case_id}` **{target['title']}** berhasil dihapus.", delete_after=15)
+
+    # ── INFO DETAIL ──────────────────────────────────
+    if sub in ("info", "detail", "cek"):
+        if not args or not args.strip().isdigit():
+            return await ctx.send("❌ Masukkan ID case. Contoh: `!listcase info 2`", delete_after=8)
+
+        case_id = int(args.strip())
+        target  = next((c for c in cases if c["id"] == case_id), None)
+        if not target:
+            return await ctx.send(f"❌ Case `#{case_id}` tidak ditemukan.", delete_after=8)
+
+        s_emoji = STATUS_EMOJI.get(target["status"], "❓")
+        embed   = discord.Embed(
+            title=f"📁 Detail Case #{target['id']}",
+            description=f"**{target['title']}**",
+            color=discord.Color.blurple(),
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        embed.add_field(name="📌 Status",       value=f"{s_emoji} {target['status'].title()}", inline=True)
+        embed.add_field(name="📅 Ditambahkan",  value=f"<t:{target['created_ts']}:F>",         inline=True)
+        embed.add_field(name="👤 Oleh",         value=target.get("added_by", "?"),              inline=True)
+        if target.get("note"):
+            embed.add_field(name="📝 Catatan",  value=target["note"], inline=False)
+        embed.set_footer(text="Asisten Lurah BFL • !listcase")
+        return await ctx.send(embed=embed)
+
+    # ── UNKNOWN SUBCOMMAND ───────────────────────────
+    await ctx.send(
+        "❓ Subcommand tidak dikenal. Gunakan:\n"
+        "`!listcase` · `!listcase add <judul>` · `!listcase done <id>` · "
+        "`!listcase proses <id>` · `!listcase hapus <id>` · `!listcase info <id>`",
+        delete_after=12
+    )
 
 
 bot.run(TOKEN)
