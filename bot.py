@@ -200,6 +200,26 @@ def is_admin(member) -> bool:
                 return True
     return False
 
+MODERATOR_FILE = "moderators.json"
+
+def load_moderators() -> list:
+    return load_json(MODERATOR_FILE, default=[
+        523513293374095361,
+        924476525129125938,
+        419422639300411393,
+        1162980404370870302,
+    ])
+
+def save_moderators(ids: list):
+    save_json(MODERATOR_FILE, ids)
+
+def is_moderator(member) -> bool:
+    """Akses terbatas: hanya untuk command moderasi member (!warn, !timeout, !ban, !unban, !clear).
+    Admin/Owner otomatis lolos juga."""
+    if is_admin(member):
+        return True
+    return member.id in load_moderators()
+
 def is_game_channel(ctx) -> bool:
     """Cek apakah command dijalankan di channel game (SPAM_CHANNEL_ID). DM selalu ditolak."""
     if isinstance(ctx.channel, discord.DMChannel):
@@ -902,6 +922,7 @@ async def on_ready():
 
     check_tiktok.start()
     check_giveaways.start()
+    check_setoran_reset.start()
     print(f"✅ Semua sistem aktif. Logged in as {bot.user}")
 
 @bot.event
@@ -1199,7 +1220,7 @@ async def leaderboard(ctx):
 # ═══════════════════════════════════════════════════════
 @bot.command(name="warn")
 async def warn(ctx, member: discord.Member = None, *, alasan="Tidak ada alasan"):
-    if not is_admin(ctx.author):
+    if not is_moderator(ctx.author):
         return await ctx.send("❌ Kamu tidak punya izin untuk command ini.")
     if member is None:
         return await ctx.send("❌ Format: `!warn @user [alasan]`")
@@ -1275,7 +1296,7 @@ async def warnlist(ctx, member: discord.Member):
 
 @bot.command(name="clearwarn")
 async def clearwarn(ctx, member: discord.Member = None):
-    if not is_admin(ctx.author):
+    if not is_moderator(ctx.author):
         return await ctx.send("❌ Kamu tidak punya izin untuk command ini.")
     if member is None:
         return await ctx.send("❌ Format: `!clearwarn @user`")
@@ -1497,7 +1518,7 @@ async def pengumuman(ctx, channel_id: int, *, pesan: str):
 # ═══════════════════════════════════════════════════════
 @bot.command(name="timeout")
 async def timeout_member(ctx, member: discord.Member = None, durasi: int = None, *, alasan="Tidak ada alasan"):
-    if not is_admin(ctx.author):
+    if not is_moderator(ctx.author):
         return await ctx.send("❌ Kamu tidak punya izin untuk command ini.")
     if member is None or durasi is None:
         return await ctx.send("❌ Format: `!timeout @user <menit> [alasan]`")
@@ -1515,7 +1536,7 @@ async def timeout_error(ctx, error): await ctx.send(f"❌ Error: {error}")
 
 @bot.command(name="ban")
 async def ban_member(ctx, member: discord.Member = None, *, alasan="Tidak ada alasan"):
-    if not is_admin(ctx.author):
+    if not is_moderator(ctx.author):
         return await ctx.send("❌ Kamu tidak punya izin untuk command ini.")
     if member is None:
         return await ctx.send("❌ Format: `!ban @user [alasan]`")
@@ -1531,7 +1552,7 @@ async def ban_error(ctx, error): await ctx.send(f"❌ Error: {error}")
 
 @bot.command(name="unban")
 async def unban_member(ctx, user_id: int = None):
-    if not is_admin(ctx.author):
+    if not is_moderator(ctx.author):
         return await ctx.send("❌ Kamu tidak punya izin untuk command ini.")
     if user_id is None:
         return await ctx.send("❌ Format: `!unban <user_id>`")
@@ -1579,7 +1600,7 @@ async def remove_role(ctx, member: discord.Member = None, *, role_name: str = No
 
 @bot.command(name="clear", aliases=["purge","hapus"])
 async def clear_messages(ctx, jumlah: int = 10):
-    if not is_admin(ctx.author):
+    if not is_moderator(ctx.author):
         return await ctx.send("❌ Kamu tidak punya izin untuk command ini.")
     if isinstance(ctx.channel, discord.DMChannel):
         return await ctx.send("❌ Command ini hanya bisa digunakan di server.")
@@ -1588,6 +1609,52 @@ async def clear_messages(ctx, jumlah: int = 10):
 
 @clear_messages.error
 async def clear_error(ctx, error): await ctx.send(f"❌ Error: {error}")
+
+# ═══════════════════════════════════════════════════════
+#  MODERATOR ACCESS (akses terbatas: !warn, !timeout, !ban, !unban, !clear)
+# ═══════════════════════════════════════════════════════
+@bot.command(name="addmod")
+async def add_moderator(ctx, member: discord.Member = None):
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya **Admin / Owner** yang bisa menambah moderator.", delete_after=8)
+    if member is None:
+        return await ctx.send("❌ Format: `!addmod @user`", delete_after=8)
+    mods = load_moderators()
+    if member.id in mods:
+        return await ctx.send(f"⚠️ {member.mention} sudah jadi moderator.", delete_after=8)
+    mods.append(member.id)
+    save_moderators(mods)
+    await ctx.send(f"✅ {member.mention} sekarang punya akses moderasi (`!warn`, `!timeout`, `!ban`, `!unban`, `!clear`).")
+
+@bot.command(name="removemod")
+async def remove_moderator(ctx, member: discord.Member = None):
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya **Admin / Owner** yang bisa menghapus moderator.", delete_after=8)
+    if member is None:
+        return await ctx.send("❌ Format: `!removemod @user`", delete_after=8)
+    mods = load_moderators()
+    if member.id not in mods:
+        return await ctx.send(f"❌ {member.mention} tidak ada di daftar moderator.", delete_after=8)
+    mods.remove(member.id)
+    save_moderators(mods)
+    await ctx.send(f"🗑️ Akses moderasi {member.mention} telah dicabut.")
+
+@bot.command(name="modlist", aliases=["listmod"])
+async def list_moderators(ctx):
+    mods = load_moderators()
+    if not mods:
+        return await ctx.send("📋 Belum ada moderator yang ditambahkan.")
+    lines = []
+    for uid in mods:
+        member = ctx.guild.get_member(uid) if ctx.guild else None
+        lines.append(f"• {member.mention if member else f'`{uid}`'}")
+    embed = discord.Embed(
+        title="🛡️ Daftar Moderator",
+        description="\n".join(lines),
+        color=discord.Color.blurple()
+    )
+    embed.set_footer(text="Akses: !warn · !warnlist · !clearwarn · !timeout · !ban · !unban · !clear")
+    await ctx.send(embed=embed)
 
 # ═══════════════════════════════════════════════════════
 #  COMMANDS — TICKET SETUP
@@ -3672,6 +3739,175 @@ async def listcase_cmd(ctx, subcommand: str = None, *, args: str = None):
         "`!listcase proses <id>` · `!listcase hapus <id>` · `!listcase info <id>`",
         delete_after=12
     )
+
+
+# ═══════════════════════════════════════════════════════
+#  SETORAN METALSCRAP (reset otomatis tiap Senin 00.00 WIB)
+# ═══════════════════════════════════════════════════════
+SETORAN_FILE = "setoran_metalscrap.json"
+
+def _week_start_str(dt: datetime.datetime) -> str:
+    """Tanggal Senin (ISO date) dari minggu yang memuat dt, dalam WIB."""
+    monday = dt.date() - datetime.timedelta(days=dt.weekday())
+    return monday.isoformat()
+
+def load_setoran() -> dict:
+    data = load_json(SETORAN_FILE, default={"week_start": None, "entries": {}})
+    current_week = _week_start_str(datetime.datetime.now(WIB))
+    if data.get("week_start") != current_week:
+        # Minggu baru sudah dimulai → reset otomatis, simpan arsip minggu lalu
+        data = {
+            "week_start": current_week,
+            "entries": {},
+            "previous_week_start": data.get("week_start"),
+            "previous_entries": data.get("entries", {}),
+        }
+        save_json(SETORAN_FILE, data)
+    return data
+
+def save_setoran(d: dict):
+    save_json(SETORAN_FILE, d)
+
+def _parse_jumlah(raw: str):
+    raw = raw.strip().lower().replace("kg", "").replace(",", ".").strip()
+    try:
+        val = float(raw)
+        if val <= 0:
+            return None
+        return val
+    except ValueError:
+        return None
+
+@tasks.loop(minutes=5)
+async def check_setoran_reset():
+    # Memuat data otomatis melakukan reset jika minggu sudah berganti
+    load_setoran()
+
+@check_setoran_reset.before_loop
+async def before_check_setoran_reset():
+    await bot.wait_until_ready()
+
+@bot.command(name="setoran")
+async def setoran_cmd(ctx, *, args: str = None):
+    """
+    !setoran <nama> - <jumlah>   → Catat setoran metalscrap
+    !setoran hapus <nama>        → Hapus entri setoran (admin)
+    !setoran reset               → Paksa reset semua setoran (admin)
+
+    Setoran otomatis di-reset tiap hari Senin jam 00.00 WIB.
+    """
+    if not args:
+        return await ctx.send(
+            "❌ Format salah. Contoh: `!setoran Budi - 15`\n"
+            "Gunakan `!setoranlist` untuk melihat rekap minggu ini.",
+            delete_after=12
+        )
+
+    parts = args.strip().split()
+
+    # ── SUBCOMMAND: reset (admin) ────────────────────
+    if parts[0].lower() == "reset":
+        if not is_admin(ctx.author):
+            return await ctx.send("❌ Hanya **Admin / Owner** yang bisa reset setoran.", delete_after=8)
+        current_week = _week_start_str(datetime.datetime.now(WIB))
+        old = load_setoran()
+        save_setoran({
+            "week_start": current_week,
+            "entries": {},
+            "previous_week_start": old.get("week_start"),
+            "previous_entries": old.get("entries", {}),
+        })
+        return await ctx.send("🔄 Setoran metalscrap minggu ini berhasil di-reset.")
+
+    # ── SUBCOMMAND: hapus <nama> (admin) ─────────────
+    if parts[0].lower() == "hapus" and len(parts) > 1:
+        if not is_admin(ctx.author):
+            return await ctx.send("❌ Hanya **Admin / Owner** yang bisa menghapus entri.", delete_after=8)
+        nama_target = " ".join(parts[1:]).strip()
+        data = load_setoran()
+        key = nama_target.lower()
+        if key not in data["entries"]:
+            return await ctx.send(f"❌ Entri **{nama_target}** tidak ditemukan di setoran minggu ini.", delete_after=8)
+        removed = data["entries"].pop(key)
+        save_setoran(data)
+        return await ctx.send(f"🗑️ Entri **{removed['nama']}** ({removed['jumlah']:g}) berhasil dihapus dari setoran.")
+
+    # ── INPUT SETORAN: nama - jumlah ─────────────────
+    if "-" not in args:
+        return await ctx.send(
+            "❌ Format salah. Contoh: `!setoran Budi - 15`",
+            delete_after=10
+        )
+
+    nama_raw, _, jumlah_raw = args.rpartition("-")
+    nama_raw = nama_raw.strip()
+    jumlah = _parse_jumlah(jumlah_raw)
+
+    if not nama_raw:
+        return await ctx.send("❌ Nama tidak boleh kosong. Contoh: `!setoran Budi - 15`", delete_after=10)
+    if jumlah is None:
+        return await ctx.send("❌ Jumlah tidak valid. Contoh: `!setoran Budi - 15`", delete_after=10)
+
+    data = load_setoran()
+    key  = nama_raw.lower()
+    now_ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+
+    existing = data["entries"].get(key, {"nama": nama_raw, "jumlah": 0.0})
+    existing["nama"]         = nama_raw
+    existing["jumlah"]       = existing.get("jumlah", 0.0) + jumlah
+    existing["terakhir_oleh"] = ctx.author.display_name
+    existing["terakhir_ts"]   = now_ts
+    data["entries"][key] = existing
+    save_setoran(data)
+
+    embed = discord.Embed(
+        title="♻️ Setoran Metalscrap Dicatat",
+        description=(
+            f"**Nama:** {existing['nama']}\n"
+            f"**Ditambahkan:** +{jumlah:g}\n"
+            f"**Total minggu ini:** {existing['jumlah']:g}"
+        ),
+        color=discord.Color.from_rgb(120, 170, 80),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+    embed.set_footer(text=f"Dicatat oleh {ctx.author.display_name} • Asisten Lurah BFL")
+    await ctx.send(embed=embed)
+
+@bot.command(name="setoranlist", aliases=["setoranlst", "listsetoran"])
+async def setoranlist_cmd(ctx):
+    """Menampilkan rekap setoran metalscrap minggu ini."""
+    data    = load_setoran()
+    entries = data.get("entries", {})
+
+    if not entries:
+        return await ctx.send(
+            "📋 Belum ada setoran metalscrap minggu ini. Catat dengan `!setoran <nama> - <jumlah>`"
+        )
+
+    sorted_entries = sorted(entries.values(), key=lambda e: e["jumlah"], reverse=True)
+    total = sum(e["jumlah"] for e in sorted_entries)
+
+    lines = []
+    for i, e in enumerate(sorted_entries, start=1):
+        lines.append(f"`#{i}` **{e['nama']}** — {e['jumlah']:g}")
+
+    week_start_dt = datetime.date.fromisoformat(data["week_start"])
+    week_end_dt   = week_start_dt + datetime.timedelta(days=6)
+
+    embed = discord.Embed(
+        title="♻️ Rekap Setoran Metalscrap",
+        description="\n".join(lines),
+        color=discord.Color.from_rgb(120, 170, 80),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+    embed.add_field(name="Total Keseluruhan", value=f"{total:g}", inline=True)
+    embed.add_field(
+        name="Periode Minggu Ini",
+        value=f"{week_start_dt.strftime('%d %b')} – {week_end_dt.strftime('%d %b %Y')}",
+        inline=True
+    )
+    embed.set_footer(text="Reset otomatis tiap Senin 00.00 WIB • Asisten Lurah BFL")
+    await ctx.send(embed=embed)
 
 
 bot.run(TOKEN)
