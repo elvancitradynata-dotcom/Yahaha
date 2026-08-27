@@ -11,7 +11,6 @@ import io, requests, colorsys, pytz
 TOKEN                   = os.environ["TOKEN"]
 OWNER_ID                = int(os.environ["OWNER_ID"])
 SPAM_CHANNEL_ID         = int(os.environ["SPAM_CHANNEL_ID"])
-TIKTOK_USERNAME         = os.environ["TIKTOK_USERNAME"]
 TIKTOK_CHECK_CHANNEL_ID = int(os.environ["TIKTOK_CHECK_CHANNEL_ID"])
 TICKET_CHANNEL_ID       = int(os.environ["TICKET_CHANNEL_ID"])
 VOICE_CATEGORY_ID       = int(os.environ["VOICE_CATEGORY_ID"])
@@ -921,6 +920,7 @@ async def on_ready():
             bot.add_view(PollView(pid, pw["options"]))
 
     check_tiktok.start()
+    check_tiktok_live.start()
     check_giveaways.start()
     check_setoran_reset.start()
     print(f"✅ Semua sistem aktif. Logged in as {bot.user}")
@@ -1133,14 +1133,44 @@ async def before_check_giveaways():
 # ═══════════════════════════════════════════════════════
 #  TASKS — TIKTOK
 # ═══════════════════════════════════════════════════════
+TIKTOK_SETTINGS_FILE = "tiktok_settings.json"
+
+def load_tiktok_settings() -> dict:
+    return load_json(TIKTOK_SETTINGS_FILE, default={"username": None, "is_live": False})
+
+def save_tiktok_settings(d: dict):
+    save_json(TIKTOK_SETTINGS_FILE, d)
+
+@bot.command(name="settiktok")
+async def set_tiktok_username(ctx, username: str = None):
+    """!settiktok <username> → Atur/ganti username TikTok yang dipantau (admin)."""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya **Admin / Owner** yang bisa mengatur username TikTok.", delete_after=8)
+    settings = load_tiktok_settings()
+    if not username:
+        current = settings.get("username")
+        if current:
+            return await ctx.send(f"ℹ️ Username TikTok yang sedang dipantau: **@{current}**")
+        return await ctx.send("❌ Belum ada username diatur. Format: `!settiktok <username>`", delete_after=8)
+    username = username.lstrip("@").strip()
+    settings["username"] = username
+    settings["is_live"]  = False
+    save_tiktok_settings(settings)
+    save_last_tiktok({})  # reset agar video terakhir dicek ulang untuk username baru
+    await ctx.send(f"✅ Sekarang memantau TikTok **@{username}** (video baru & live).")
+
 @tasks.loop(minutes=5)
 async def check_tiktok():
+    settings = load_tiktok_settings()
+    username = settings.get("username")
+    if not username:
+        return
     channel = bot.get_channel(TIKTOK_CHECK_CHANNEL_ID)
     if not channel:
         return
     try:
         last_data = load_last_tiktok()
-        url       = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
+        url       = f"https://www.tiktok.com/@{username}"
         headers   = {"User-Agent": "Mozilla/5.0"}
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -1152,9 +1182,9 @@ async def check_tiktok():
         if last_data.get("last_id") == latest_id:
             return
         save_last_tiktok({"last_id": latest_id})
-        tiktok_url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}/video/{latest_id}"
+        tiktok_url = f"https://www.tiktok.com/@{username}/video/{latest_id}"
         embed = discord.Embed(
-            title=f"🎵 @{TIKTOK_USERNAME} baru posting di TikTok!",
+            title=f"🎵 @{username} baru posting di TikTok!",
             description=f"👇\n{tiktok_url}",
             color=discord.Color.from_rgb(254, 44, 85),
             timestamp=datetime.datetime.now(datetime.timezone.utc)
@@ -1166,6 +1196,48 @@ async def check_tiktok():
 
 @check_tiktok.before_loop
 async def before_tiktok():
+    await bot.wait_until_ready()
+
+@tasks.loop(minutes=5)
+async def check_tiktok_live():
+    settings = load_tiktok_settings()
+    username = settings.get("username")
+    if not username:
+        return
+    channel = bot.get_channel(TIKTOK_CHECK_CHANNEL_ID)
+    if not channel:
+        return
+    try:
+        url     = f"https://www.tiktok.com/@{username}/live"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                html = await resp.text()
+
+        # Deteksi status live dari data yang di-embed TikTok di halaman /live.
+        # "status":2 = sedang live, "status":4 = sudah berakhir/offline.
+        is_live_now = bool(re.search(r'"status"\s*:\s*2\b', html)) and not re.search(r'"status"\s*:\s*4\b', html)
+        was_live    = settings.get("is_live", False)
+
+        if is_live_now and not was_live:
+            settings["is_live"] = True
+            save_tiktok_settings(settings)
+            embed = discord.Embed(
+                title=f"🔴 @{username} sedang LIVE di TikTok!",
+                description=f"👇\n{url}",
+                color=discord.Color.from_rgb(254, 44, 85),
+                timestamp=datetime.datetime.now(datetime.timezone.utc)
+            )
+            embed.set_footer(text="Asisten Lurah BFL • TikTok Live")
+            await channel.send(embed=embed)
+        elif not is_live_now and was_live:
+            settings["is_live"] = False
+            save_tiktok_settings(settings)
+    except Exception as e:
+        print(f"[TikTokLive] {e}")
+
+@check_tiktok_live.before_loop
+async def before_check_tiktok_live():
     await bot.wait_until_ready()
 
 # ═══════════════════════════════════════════════════════
@@ -3778,6 +3850,55 @@ def _parse_jumlah(raw: str):
     except ValueError:
         return None
 
+def _parse_setoran_lines(text: str):
+    """Parse blok teks multi-baris, tiap baris format: <nama> <jumlah>.
+    Return (entries, errors) — entries = list[(nama, jumlah)], errors = list baris yang gagal diparse."""
+    entries = []
+    errors  = []
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            errors.append(line)
+            continue
+        jumlah_raw = parts[-1]
+        nama_raw   = " ".join(parts[:-1]).rstrip("-").strip()
+        jumlah     = _parse_jumlah(jumlah_raw)
+        if not nama_raw or jumlah is None:
+            errors.append(line)
+            continue
+        entries.append((nama_raw, jumlah))
+    return entries, errors
+
+def _apply_setoran_entries(entries, oleh: str) -> dict:
+    """Terapkan list (nama, jumlah) ke data setoran minggu ini, akumulatif. Return data terbaru."""
+    data   = load_setoran()
+    now_ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+    for nama_raw, jumlah in entries:
+        key = nama_raw.lower()
+        existing = data["entries"].get(key, {"nama": nama_raw, "jumlah": 0.0})
+        existing["nama"]          = nama_raw
+        existing["jumlah"]        = existing.get("jumlah", 0.0) + jumlah
+        existing["terakhir_oleh"] = oleh
+        existing["terakhir_ts"]   = now_ts
+        data["entries"][key] = existing
+    save_setoran(data)
+    return data
+
+def _setoran_list_embed(data: dict, footer: str) -> discord.Embed:
+    sorted_entries = sorted(data["entries"].values(), key=lambda e: e["jumlah"], reverse=True)
+    lines = [f"- {e['nama']} {e['jumlah']:g}" for e in sorted_entries]
+    embed = discord.Embed(
+        title="♻️ Daftar Setoran",
+        description="\n".join(lines) if lines else "_Belum ada setoran minggu ini._",
+        color=discord.Color.from_rgb(120, 170, 80),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+    embed.set_footer(text=footer)
+    return embed
+
 @tasks.loop(minutes=5)
 async def check_setoran_reset():
     # Memuat data otomatis melakukan reset jika minggu sudah berganti
@@ -3790,18 +3911,44 @@ async def before_check_setoran_reset():
 @bot.command(name="setoran")
 async def setoran_cmd(ctx, *, args: str = None):
     """
-    !setoran <nama> <jumlah>     → Catat setoran metalscrap
+    !setoran                     → Bot minta input, bisa banyak baris sekaligus
+    !setoran <nama> <jumlah>     → Catat langsung (bisa multi-baris juga)
     !setoran hapus <nama>        → Hapus entri setoran (admin)
     !setoran reset               → Paksa reset semua setoran (admin)
 
     Setoran otomatis di-reset tiap hari Senin jam 00.00 WIB.
     """
+    # ── TANPA ARGUMEN: mode interaktif ───────────────
     if not args:
-        return await ctx.send(
-            "❌ Format salah. Contoh: `!setoran masjack 200`\n"
-            "Gunakan `!setoranlist` untuk melihat rekap minggu ini.",
-            delete_after=12
+        await ctx.send(
+            f"{ctx.author.mention} 📝 Input setoran kalian.\n"
+            "Bisa lebih dari satu, satu baris satu **nama jumlah**. Contoh:\n"
+            "```\nAbb 200\nAbk 200\nAbcd 200\n```"
         )
+
+        def check(m):
+            return m.author == ctx.author and m.channel == ctx.channel
+
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=120)
+        except asyncio.TimeoutError:
+            return await ctx.send(
+                f"{ctx.author.mention} ⏰ Waktu habis. Ketik `!setoran` lagi untuk mulai ulang.",
+                delete_after=10
+            )
+
+        entries, errors = _parse_setoran_lines(reply.content)
+        if not entries:
+            return await ctx.send(
+                "❌ Tidak ada input valid. Format tiap baris: `nama jumlah`",
+                delete_after=10
+            )
+
+        data = _apply_setoran_entries(entries, ctx.author.display_name)
+        footer = f"Dicatat oleh {ctx.author.display_name} • Asisten Lurah BFL"
+        if errors:
+            footer += f" • {len(errors)} baris dilewati (format salah)"
+        return await ctx.send(embed=_setoran_list_embed(data, footer))
 
     parts = args.strip().split()
 
@@ -3832,68 +3979,30 @@ async def setoran_cmd(ctx, *, args: str = None):
         save_setoran(data)
         return await ctx.send(f"🗑️ Entri **{removed['nama']}** ({removed['jumlah']:g}) berhasil dihapus dari setoran.")
 
-    # ── INPUT SETORAN: nama jumlah ───────────────────
-    if len(parts) < 2:
+    # ── INPUT LANGSUNG: bisa satu atau banyak baris ──
+    entries, errors = _parse_setoran_lines(args)
+    if not entries:
         return await ctx.send(
-            "❌ Format salah. Contoh: `!setoran masjack 200`",
-            delete_after=10
+            "❌ Format salah. Contoh: `!setoran masjack 200`\n"
+            "Bisa juga banyak baris sekaligus, satu baris satu `nama jumlah`.",
+            delete_after=12
         )
 
-    jumlah_raw = parts[-1]
-    nama_raw   = " ".join(parts[:-1]).rstrip("-").strip()
-    jumlah     = _parse_jumlah(jumlah_raw)
-
-    if not nama_raw:
-        return await ctx.send("❌ Nama tidak boleh kosong. Contoh: `!setoran masjack 200`", delete_after=10)
-    if jumlah is None:
-        return await ctx.send("❌ Jumlah tidak valid. Contoh: `!setoran masjack 200`", delete_after=10)
-
-    data = load_setoran()
-    key  = nama_raw.lower()
-    now_ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
-
-    existing = data["entries"].get(key, {"nama": nama_raw, "jumlah": 0.0})
-    existing["nama"]         = nama_raw
-    existing["jumlah"]       = existing.get("jumlah", 0.0) + jumlah
-    existing["terakhir_oleh"] = ctx.author.display_name
-    existing["terakhir_ts"]   = now_ts
-    data["entries"][key] = existing
-    save_setoran(data)
-
-    sorted_entries = sorted(data["entries"].values(), key=lambda e: e["jumlah"], reverse=True)
-    lines = [f"- {e['nama']} {e['jumlah']:g}" for e in sorted_entries]
-
-    embed = discord.Embed(
-        title="♻️ Daftar Setoran",
-        description="\n".join(lines),
-        color=discord.Color.from_rgb(120, 170, 80),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    embed.set_footer(text=f"Dicatat oleh {ctx.author.display_name} • Asisten Lurah BFL")
-    await ctx.send(embed=embed)
+    data = _apply_setoran_entries(entries, ctx.author.display_name)
+    footer = f"Dicatat oleh {ctx.author.display_name} • Asisten Lurah BFL"
+    if errors:
+        footer += f" • {len(errors)} baris dilewati (format salah)"
+    await ctx.send(embed=_setoran_list_embed(data, footer))
 
 @bot.command(name="setoranlist", aliases=["setoranlst", "listsetoran"])
 async def setoranlist_cmd(ctx):
     """Menampilkan rekap setoran metalscrap minggu ini."""
-    data    = load_setoran()
-    entries = data.get("entries", {})
-
-    if not entries:
+    data = load_setoran()
+    if not data.get("entries"):
         return await ctx.send(
-            "📋 Belum ada setoran metalscrap minggu ini. Catat dengan `!setoran <nama> <jumlah>`"
+            "📋 Belum ada setoran metalscrap minggu ini. Catat dengan `!setoran`"
         )
-
-    sorted_entries = sorted(entries.values(), key=lambda e: e["jumlah"], reverse=True)
-    lines = [f"- {e['nama']} {e['jumlah']:g}" for e in sorted_entries]
-
-    embed = discord.Embed(
-        title="♻️ Daftar Setoran",
-        description="\n".join(lines),
-        color=discord.Color.from_rgb(120, 170, 80),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    embed.set_footer(text="Reset otomatis tiap Senin 00.00 WIB • Asisten Lurah BFL")
-    await ctx.send(embed=embed)
+    await ctx.send(embed=_setoran_list_embed(data, "Reset otomatis tiap Senin 00.00 WIB • Asisten Lurah BFL"))
 
 
 bot.run(TOKEN)
