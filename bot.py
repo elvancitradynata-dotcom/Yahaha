@@ -3790,7 +3790,7 @@ async def before_check_setoran_reset():
 @bot.command(name="setoran")
 async def setoran_cmd(ctx, *, args: str = None):
     """
-    !setoran <nama> - <jumlah>   → Catat setoran metalscrap
+    !setoran <nama> <jumlah>     → Catat setoran metalscrap
     !setoran hapus <nama>        → Hapus entri setoran (admin)
     !setoran reset               → Paksa reset semua setoran (admin)
 
@@ -3798,7 +3798,7 @@ async def setoran_cmd(ctx, *, args: str = None):
     """
     if not args:
         return await ctx.send(
-            "❌ Format salah. Contoh: `!setoran Budi - 15`\n"
+            "❌ Format salah. Contoh: `!setoran masjack 200`\n"
             "Gunakan `!setoranlist` untuk melihat rekap minggu ini.",
             delete_after=12
         )
@@ -3832,21 +3832,21 @@ async def setoran_cmd(ctx, *, args: str = None):
         save_setoran(data)
         return await ctx.send(f"🗑️ Entri **{removed['nama']}** ({removed['jumlah']:g}) berhasil dihapus dari setoran.")
 
-    # ── INPUT SETORAN: nama - jumlah ─────────────────
-    if "-" not in args:
+    # ── INPUT SETORAN: nama jumlah ───────────────────
+    if len(parts) < 2:
         return await ctx.send(
-            "❌ Format salah. Contoh: `!setoran Budi - 15`",
+            "❌ Format salah. Contoh: `!setoran masjack 200`",
             delete_after=10
         )
 
-    nama_raw, _, jumlah_raw = args.rpartition("-")
-    nama_raw = nama_raw.strip()
-    jumlah = _parse_jumlah(jumlah_raw)
+    jumlah_raw = parts[-1]
+    nama_raw   = " ".join(parts[:-1]).rstrip("-").strip()
+    jumlah     = _parse_jumlah(jumlah_raw)
 
     if not nama_raw:
-        return await ctx.send("❌ Nama tidak boleh kosong. Contoh: `!setoran Budi - 15`", delete_after=10)
+        return await ctx.send("❌ Nama tidak boleh kosong. Contoh: `!setoran masjack 200`", delete_after=10)
     if jumlah is None:
-        return await ctx.send("❌ Jumlah tidak valid. Contoh: `!setoran Budi - 15`", delete_after=10)
+        return await ctx.send("❌ Jumlah tidak valid. Contoh: `!setoran masjack 200`", delete_after=10)
 
     data = load_setoran()
     key  = nama_raw.lower()
@@ -3860,13 +3860,12 @@ async def setoran_cmd(ctx, *, args: str = None):
     data["entries"][key] = existing
     save_setoran(data)
 
+    sorted_entries = sorted(data["entries"].values(), key=lambda e: e["jumlah"], reverse=True)
+    lines = [f"- {e['nama']} {e['jumlah']:g}" for e in sorted_entries]
+
     embed = discord.Embed(
-        title="♻️ Setoran Metalscrap Dicatat",
-        description=(
-            f"**Nama:** {existing['nama']}\n"
-            f"**Ditambahkan:** +{jumlah:g}\n"
-            f"**Total minggu ini:** {existing['jumlah']:g}"
-        ),
+        title="♻️ Daftar Setoran",
+        description="\n".join(lines),
         color=discord.Color.from_rgb(120, 170, 80),
         timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
@@ -3881,30 +3880,17 @@ async def setoranlist_cmd(ctx):
 
     if not entries:
         return await ctx.send(
-            "📋 Belum ada setoran metalscrap minggu ini. Catat dengan `!setoran <nama> - <jumlah>`"
+            "📋 Belum ada setoran metalscrap minggu ini. Catat dengan `!setoran <nama> <jumlah>`"
         )
 
     sorted_entries = sorted(entries.values(), key=lambda e: e["jumlah"], reverse=True)
-    total = sum(e["jumlah"] for e in sorted_entries)
-
-    lines = []
-    for i, e in enumerate(sorted_entries, start=1):
-        lines.append(f"`#{i}` **{e['nama']}** — {e['jumlah']:g}")
-
-    week_start_dt = datetime.date.fromisoformat(data["week_start"])
-    week_end_dt   = week_start_dt + datetime.timedelta(days=6)
+    lines = [f"- {e['nama']} {e['jumlah']:g}" for e in sorted_entries]
 
     embed = discord.Embed(
-        title="♻️ Rekap Setoran Metalscrap",
+        title="♻️ Daftar Setoran",
         description="\n".join(lines),
         color=discord.Color.from_rgb(120, 170, 80),
         timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    embed.add_field(name="Total Keseluruhan", value=f"{total:g}", inline=True)
-    embed.add_field(
-        name="Periode Minggu Ini",
-        value=f"{week_start_dt.strftime('%d %b')} – {week_end_dt.strftime('%d %b %Y')}",
-        inline=True
     )
     embed.set_footer(text="Reset otomatis tiap Senin 00.00 WIB • Asisten Lurah BFL")
     await ctx.send(embed=embed)
