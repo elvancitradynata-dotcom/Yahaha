@@ -3920,11 +3920,7 @@ async def setoran_cmd(ctx, *, args: str = None):
     """
     # ── TANPA ARGUMEN: mode interaktif ───────────────
     if not args:
-        await ctx.send(
-            f"{ctx.author.mention} 📝 Input setoran kalian.\n"
-            "Bisa lebih dari satu, satu baris satu **nama jumlah**. Contoh:\n"
-            "```\nAbb 200\nAbk 200\nAbcd 200\n```"
-        )
+        await ctx.send(f"{ctx.author.mention} 📝 Silahkan input setoran")
 
         def check(m):
             return m.author == ctx.author and m.channel == ctx.channel
