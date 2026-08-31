@@ -1131,72 +1131,501 @@ async def before_check_giveaways():
 
 
 # ═══════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════
 #  TASKS — TIKTOK
 # ═══════════════════════════════════════════════════════
 TIKTOK_SETTINGS_FILE = "tiktok_settings.json"
 
 def load_tiktok_settings() -> dict:
-    return load_json(TIKTOK_SETTINGS_FILE, default={"username": None, "is_live": False})
+    """Load TikTok configuration with backward compatibility."""
+    data = load_json(TIKTOK_SETTINGS_FILE, default={})
+    if not isinstance(data, dict):
+        data = {}
+
+    # New format:
+    # {
+    #   "channel_id": "...",
+    #   "usernames": {
+    #       "username": {"is_live": false}
+    #   }
+    # }
+    usernames = data.get("usernames")
+    if not isinstance(usernames, dict):
+        usernames = {}
+
+        # Migrate the old single-account format automatically.
+        old_username = data.get("username")
+        if old_username:
+            old_username = str(old_username).lstrip("@").strip()
+            if old_username:
+                usernames[old_username] = {
+                    "is_live": bool(data.get("is_live", False))
+                }
+
+    data["usernames"] = usernames
+    data.setdefault("channel_id", str(TIKTOK_CHECK_CHANNEL_ID))
+    return data
+
 
 def save_tiktok_settings(d: dict):
     save_json(TIKTOK_SETTINGS_FILE, d)
 
+
+def get_tiktok_channel():
+    """Return configured notification channel, falling back to the ENV channel."""
+    settings = load_tiktok_settings()
+    raw_id = settings.get("channel_id") or TIKTOK_CHECK_CHANNEL_ID
+    try:
+        channel = bot.get_channel(int(raw_id))
+    except (TypeError, ValueError):
+        channel = None
+    return channel
+
+
+def normalize_tiktok_username(username: str) -> str:
+    username = str(username or "").strip()
+    username = username.replace("https://www.tiktok.com/@", "")
+    username = username.replace("https://tiktok.com/@", "")
+    username = username.split("/")[0]
+    return username.lstrip("@").strip()
+
+
+def get_tiktok_usernames(settings=None) -> list:
+    settings = settings or load_tiktok_settings()
+    return list(settings.get("usernames", {}).keys())
+
+
+async def fetch_tiktok_live_page(username: str) -> dict:
+    """Fetch the live page and return status + best available thumbnail URL."""
+    url = f"https://www.tiktok.com/@{username}/live"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            url,
+            headers=TIKTOK_LIVE_HEADERS,
+            timeout=aiohttp.ClientTimeout(total=15),
+            allow_redirects=True
+        ) as resp:
+            html = await resp.text(errors="ignore")
+            status = resp.status
+            final_path = resp.url.path if resp.url else ""
+
+    matched_status2 = bool(re.search(r'"status"\s*:\s*2\b', html))
+    matched_status4 = bool(re.search(r'"status"\s*:\s*4\b', html))
+    redirected_away = "/live" not in final_path
+    blocked = html.strip() == "" or (
+        "captcha" in html.lower() and "tiktok" not in html.lower()[:2000]
+    )
+
+    if redirected_away:
+        is_live = False
+    elif matched_status2 and not matched_status4:
+        is_live = True
+    else:
+        is_live = False
+
+    # TikTok normally exposes the live/profile image through og:image.
+    # Keep several fallbacks because TikTok changes its HTML frequently.
+    thumbnail = None
+    meta_patterns = [
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+        r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
+    ]
+    for pattern in meta_patterns:
+        match = re.search(pattern, html, flags=re.I)
+        if match:
+            thumbnail = match.group(1).replace("&amp;", "&")
+            break
+
+    # Additional JSON fallback for TikTok cover/profile image URLs.
+    if not thumbnail:
+        image_patterns = [
+            r'"coverLarger"\s*:\s*"([^"]+)"',
+            r'"coverMedium"\s*:\s*"([^"]+)"',
+            r'"cover"\s*:\s*"([^"]+)"',
+            r'"avatarLarger"\s*:\s*"([^"]+)"',
+        ]
+        for pattern in image_patterns:
+            match = re.search(pattern, html)
+            if match:
+                thumbnail = (
+                    match.group(1)
+                    .replace(r'\/', '/')
+                    .replace(r'\u0026', '&')
+                    .replace("&amp;", "&")
+                )
+                break
+
+    return {
+        "is_live": is_live,
+        "status_code": status,
+        "final_path": final_path,
+        "html_len": len(html),
+        "matched_status2": matched_status2,
+        "matched_status4": matched_status4,
+        "blocked": blocked,
+        "thumbnail": thumbnail,
+    }
+
+
+async def _detect_tiktok_live(username: str) -> dict:
+    """Compatibility wrapper used by the existing manual commands."""
+    return await fetch_tiktok_live_page(username)
+
+
+async def send_tiktok_live_notification(channel, username: str, thumbnail: str = None):
+    """Send the requested @everyone TikTok LIVE notification."""
+    live_url = f"https://www.tiktok.com/@{username}/live"
+
+    embed = discord.Embed(
+        title=f"🔴 @{username} sedang LIVE di TikTok!",
+        description=f"**[Username]**: @{username}\n\n👇 **Klik untuk masuk ke LIVE**\n{live_url}",
+        url=live_url,
+        color=discord.Color.from_rgb(254, 44, 85),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+
+    if thumbnail:
+        try:
+            embed.set_image(url=thumbnail)
+        except Exception:
+            pass
+
+    embed.set_footer(text="Asisten Lurah BFL • TikTok Live")
+
+    # Discord will only actually ping @everyone if the bot has
+    # Mention Everyone permission in the target channel/server.
+    content = f"@everyone **@{username} Lagi live nih guys...**"
+    allowed_mentions = discord.AllowedMentions(
+        everyone=True,
+        users=False,
+        roles=False,
+        replied_user=False
+    )
+
+    await channel.send(
+        content=content,
+        embed=embed,
+        allowed_mentions=allowed_mentions
+    )
+
+
 @bot.command(name="settiktok")
 async def set_tiktok_username(ctx, username: str = None):
-    """!settiktok <username> → Atur/ganti username TikTok yang dipantau (admin)."""
+    """!settiktok <username> → kompatibilitas: set akun TikTok tunggal."""
     if not is_admin(ctx.author):
-        return await ctx.send("❌ Hanya **Admin / Owner** yang bisa mengatur username TikTok.", delete_after=8)
-    settings = load_tiktok_settings()
+        return await ctx.send(
+            "❌ Hanya **Admin / Owner** yang bisa mengatur username TikTok.",
+            delete_after=8
+        )
+
     if not username:
-        current = settings.get("username")
-        if current:
-            return await ctx.send(f"ℹ️ Username TikTok yang sedang dipantau: **@{current}**")
-        return await ctx.send("❌ Belum ada username diatur. Format: `!settiktok <username>`", delete_after=8)
-    username = username.lstrip("@").strip()
-    settings["username"] = username
-    settings["is_live"]  = False
+        settings = load_tiktok_settings()
+        names = get_tiktok_usernames(settings)
+        channel = get_tiktok_channel()
+        if names:
+            listed = ", ".join(f"@{x}" for x in names)
+            return await ctx.send(
+                f"ℹ️ TikTok aktif: **{listed}**\n"
+                f"📢 Channel notif: {channel.mention if channel else '`belum ditemukan`'}"
+            )
+        return await ctx.send(
+            "❌ Belum ada username. Gunakan `!tiktok add <username>`.",
+            delete_after=8
+        )
+
+    username = normalize_tiktok_username(username)
+    settings = load_tiktok_settings()
+    settings["usernames"] = {
+        username: {"is_live": False}
+    }
     save_tiktok_settings(settings)
-    save_last_tiktok({})  # reset agar video terakhir dicek ulang untuk username baru
-    await ctx.send(f"✅ Sekarang memantau TikTok **@{username}** (video baru & live).")
+    save_last_tiktok({})
+    await ctx.send(
+        f"✅ Sekarang hanya memantau TikTok **@{username}**.\n"
+        f"Gunakan `!tiktok add <username>` untuk menambah akun lain."
+    )
+
+
+@bot.group(name="tiktok", invoke_without_command=True)
+async def tiktok_group(ctx):
+    """Menu pengaturan TikTok via Discord."""
+    if ctx.invoked_subcommand is None:
+        await ctx.send(
+            "**📱 TikTok Notification Manager**\n"
+            "`!tiktok add <username>` — tambah akun\n"
+            "`!tiktok remove <username>` — hapus akun\n"
+            "`!tiktok list` — lihat semua akun\n"
+            "`!tiktok channel #channel` — ubah channel notif\n"
+            "`!tiktok channel` — lihat channel notif sekarang\n"
+            "`!tiktok test <username>` — tes notif + thumbnail\n"
+            "`!tiktok sync` — sinkronkan status live\n"
+            "`!tiktok check` — cek status semua akun"
+        )
+
+
+@tiktok_group.command(name="add")
+async def tiktok_add(ctx, username: str = None):
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya Admin / Owner.", delete_after=8)
+    if not username:
+        return await ctx.send("❌ Format: `!tiktok add <username>`", delete_after=8)
+
+    username = normalize_tiktok_username(username)
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}", username):
+        return await ctx.send("❌ Username TikTok tidak valid.", delete_after=8)
+
+    settings = load_tiktok_settings()
+    usernames = settings["usernames"]
+
+    if username in usernames:
+        return await ctx.send(f"⚠️ **@{username}** sudah ada di daftar.")
+
+    usernames[username] = {"is_live": False}
+    save_tiktok_settings(settings)
+    await ctx.send(
+        f"✅ **@{username}** ditambahkan ke daftar TikTok.\n"
+        f"👥 Total dipantau: **{len(usernames)}** akun."
+    )
+
+
+@tiktok_group.command(name="remove", aliases=["delete", "del"])
+async def tiktok_remove(ctx, username: str = None):
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya Admin / Owner.", delete_after=8)
+    if not username:
+        return await ctx.send("❌ Format: `!tiktok remove <username>`", delete_after=8)
+
+    username = normalize_tiktok_username(username)
+    settings = load_tiktok_settings()
+    usernames = settings["usernames"]
+
+    if username not in usernames:
+        return await ctx.send(f"❌ **@{username}** tidak ada di daftar.")
+
+    del usernames[username]
+    save_tiktok_settings(settings)
+
+    # Remove its last video state too.
+    last_data = load_last_tiktok()
+    videos = last_data.get("videos", {}) if isinstance(last_data, dict) else {}
+    videos.pop(username, None)
+    save_last_tiktok({"videos": videos})
+
+    await ctx.send(f"🗑️ **@{username}** berhasil dihapus dari daftar TikTok.")
+
+
+@tiktok_group.command(name="list", aliases=["ls"])
+async def tiktok_list(ctx):
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya Admin / Owner.", delete_after=8)
+
+    settings = load_tiktok_settings()
+    usernames = settings.get("usernames", {})
+    channel = get_tiktok_channel()
+
+    embed = discord.Embed(
+        title="📱 Daftar TikTok yang Dipantau",
+        color=discord.Color.from_rgb(254, 44, 85),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+
+    if usernames:
+        lines = []
+        for i, (name, state) in enumerate(usernames.items(), 1):
+            status = "🔴 LIVE" if state.get("is_live", False) else "⚫ Offline"
+            lines.append(f"**{i}.** @{name} — {status}")
+        embed.description = "\n".join(lines)
+    else:
+        embed.description = "Belum ada username TikTok."
+
+    embed.add_field(
+        name="📢 Channel Notif",
+        value=channel.mention if channel else "❌ Tidak ditemukan",
+        inline=False
+    )
+    embed.set_footer(text="Kelola dengan !tiktok add/remove/channel")
+    await ctx.send(embed=embed)
+
+
+@tiktok_group.command(name="channel")
+async def tiktok_channel(ctx, channel: discord.TextChannel = None):
+    """Set channel notif langsung dari Discord, tanpa edit source code."""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya Admin / Owner.", delete_after=8)
+
+    settings = load_tiktok_settings()
+
+    if channel is None:
+        current = get_tiktok_channel()
+        return await ctx.send(
+            f"📢 Channel TikTok saat ini: "
+            f"{current.mention if current else '❌ belum ditemukan'}"
+        )
+
+    settings["channel_id"] = str(channel.id)
+    save_tiktok_settings(settings)
+
+    await ctx.send(
+        f"✅ Channel notif TikTok diubah ke {channel.mention}.\n"
+        "Mulai sekarang notif LIVE dan posting TikTok akan dikirim ke sana."
+    )
+
+
+@tiktok_group.command(name="test")
+async def tiktok_test(ctx, username: str = None):
+    """Tes notif live dan thumbnail tanpa mengubah status."""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya Admin / Owner.", delete_after=8)
+    if not username:
+        return await ctx.send("❌ Format: `!tiktok test <username>`", delete_after=8)
+
+    username = normalize_tiktok_username(username)
+    channel = get_tiktok_channel()
+    if not channel:
+        return await ctx.send(
+            "❌ Channel notif belum ditemukan. Set dengan `!tiktok channel #channel`."
+        )
+
+    try:
+        result = await _detect_tiktok_live(username)
+    except Exception as e:
+        return await ctx.send(f"❌ Gagal mengambil halaman TikTok: `{e}`")
+
+    # Test intentionally sends the notification even when offline.
+    await send_tiktok_live_notification(channel, username, result.get("thumbnail"))
+    thumb_status = "✅ ditemukan" if result.get("thumbnail") else "⚠️ tidak ditemukan"
+    await ctx.send(
+        f"🧪 Test notif **@{username}** terkirim ke {channel.mention}.\n"
+        f"🖼️ Thumbnail: {thumb_status}"
+    )
+
+
+@tiktok_group.command(name="check")
+async def tiktok_check(ctx):
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya Admin / Owner.", delete_after=8)
+
+    settings = load_tiktok_settings()
+    usernames = get_tiktok_usernames(settings)
+    if not usernames:
+        return await ctx.send("❌ Belum ada username TikTok.")
+
+    msg = await ctx.send(f"🔎 Mengecek **{len(usernames)}** akun TikTok...")
+    results = []
+
+    for username in usernames:
+        try:
+            result = await _detect_tiktok_live(username)
+            results.append(
+                f"**@{username}** → "
+                f"{'🔴 LIVE' if result['is_live'] else '⚫ Offline'}"
+                + (" · ⚠️ TikTok challenge/block" if result["blocked"] else "")
+            )
+        except Exception as e:
+            results.append(f"**@{username}** → ❌ `{e}`")
+
+    await msg.edit(content="\n".join(results))
+
+
+@tiktok_group.command(name="sync")
+async def tiktok_sync(ctx):
+    """Sinkronkan semua akun; kirim notif jika terdeteksi baru LIVE."""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya Admin / Owner.", delete_after=8)
+
+    settings = load_tiktok_settings()
+    usernames = list(settings.get("usernames", {}).keys())
+    channel = get_tiktok_channel()
+
+    if not usernames:
+        return await ctx.send("❌ Belum ada username TikTok.")
+    if not channel:
+        return await ctx.send("❌ Channel notif tidak ditemukan.")
+
+    sent = 0
+    for username in usernames:
+        try:
+            result = await _detect_tiktok_live(username)
+            was_live = settings["usernames"][username].get("is_live", False)
+            settings["usernames"][username]["is_live"] = result["is_live"]
+
+            if result["is_live"] and not was_live:
+                await send_tiktok_live_notification(
+                    channel, username, result.get("thumbnail")
+                )
+                sent += 1
+        except Exception as e:
+            print(f"[TikTokSync] @{username}: {e}")
+
+    save_tiktok_settings(settings)
+    await ctx.send(f"✅ Sinkronisasi selesai. Notif baru dikirim: **{sent}**.")
+
 
 @tasks.loop(minutes=5)
 async def check_tiktok():
+    """Check video baru untuk semua username yang terdaftar."""
     settings = load_tiktok_settings()
-    username = settings.get("username")
-    if not username:
+    usernames = get_tiktok_usernames(settings)
+    channel = get_tiktok_channel()
+    if not usernames or not channel:
         return
-    channel = bot.get_channel(TIKTOK_CHECK_CHANNEL_ID)
-    if not channel:
-        return
+
+    last_data = load_last_tiktok()
+    if not isinstance(last_data, dict):
+        last_data = {}
+
+    # Backward compatibility with old {"last_id": "..."} format.
+    videos = last_data.get("videos", {})
+    if not isinstance(videos, dict):
+        videos = {}
+    if last_data.get("last_id") and usernames:
+        videos.setdefault(usernames[0], last_data["last_id"])
+
     try:
-        last_data = load_last_tiktok()
-        url       = f"https://www.tiktok.com/@{username}"
-        headers   = {"User-Agent": "Mozilla/5.0"}
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                html = await resp.text()
-        matches = re.findall(r'"id":"(\d+)"', html)
-        if not matches:
-            return
-        latest_id = matches[0]
-        if last_data.get("last_id") == latest_id:
-            return
-        save_last_tiktok({"last_id": latest_id})
-        tiktok_url = f"https://www.tiktok.com/@{username}/video/{latest_id}"
-        embed = discord.Embed(
-            title=f"🎵 @{username} baru posting di TikTok!",
-            description=f"👇\n{tiktok_url}",
-            color=discord.Color.from_rgb(254, 44, 85),
-            timestamp=datetime.datetime.now(datetime.timezone.utc)
-        )
-        embed.set_footer(text="Asisten Lurah BFL • TikTok Tracker")
-        await channel.send(embed=embed)
-    except Exception as e:
-        print(f"[TikTok] {e}")
+            for username in usernames:
+                try:
+                    url = f"https://www.tiktok.com/@{username}"
+                    headers = {"User-Agent": "Mozilla/5.0"}
+                    async with session.get(
+                        url,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as resp:
+                        html = await resp.text(errors="ignore")
+
+                    matches = re.findall(r'"id":"(\d+)"', html)
+                    if not matches:
+                        continue
+
+                    latest_id = matches[0]
+                    if videos.get(username) == latest_id:
+                        continue
+
+                    videos[username] = latest_id
+                    tiktok_url = f"https://www.tiktok.com/@{username}/video/{latest_id}"
+
+                    embed = discord.Embed(
+                        title=f"🎵 @{username} baru posting di TikTok!",
+                        description=f"👇\n{tiktok_url}",
+                        url=tiktok_url,
+                        color=discord.Color.from_rgb(254, 44, 85),
+                        timestamp=datetime.datetime.now(datetime.timezone.utc)
+                    )
+                    embed.set_footer(text="Asisten Lurah BFL • TikTok Tracker")
+                    await channel.send(embed=embed)
+                except Exception as e:
+                    print(f"[TikTok] @{username}: {e}")
+    finally:
+        save_last_tiktok({"videos": videos})
+
 
 @check_tiktok.before_loop
 async def before_tiktok():
     await bot.wait_until_ready()
+
 
 TIKTOK_LIVE_HEADERS = {
     "User-Agent": (
@@ -1210,162 +1639,142 @@ TIKTOK_LIVE_HEADERS = {
     "Referer": "https://www.tiktok.com/",
 }
 
-async def _detect_tiktok_live(username: str) -> dict:
-    """Cek apakah @username sedang live. Return dict diagnostik:
-    {is_live, status_code, final_path, html_len, matched_status2, matched_status4, blocked}"""
-    url = f"https://www.tiktok.com/@{username}/live"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            url, headers=TIKTOK_LIVE_HEADERS,
-            timeout=aiohttp.ClientTimeout(total=10),
-            allow_redirects=True
-        ) as resp:
-            html   = await resp.text()
-            status = resp.status
-            final_path = resp.url.path if resp.url else ""
-
-    matched_status2 = bool(re.search(r'"status"\s*:\s*2\b', html))
-    matched_status4 = bool(re.search(r'"status"\s*:\s*4\b', html))
-    # Kalau TikTok redirect balik ke halaman profil (bukan /live lagi),
-    # itu tanda paling kuat bahwa akun sedang TIDAK live — walaupun regex JSON gagal ketemu.
-    redirected_away = "/live" not in final_path
-    # Tanda halaman diblokir/di-challenge (bukan HTML normal TikTok)
-    blocked = html.strip() == "" or ("captcha" in html.lower() and "tiktok" not in html.lower()[:2000])
-
-    if redirected_away:
-        is_live = False
-    elif matched_status2 and not matched_status4:
-        is_live = True
-    else:
-        is_live = False
-
-    return {
-        "is_live": is_live,
-        "status_code": status,
-        "final_path": final_path,
-        "html_len": len(html),
-        "matched_status2": matched_status2,
-        "matched_status4": matched_status4,
-        "blocked": blocked,
-    }
 
 @tasks.loop(minutes=5)
 async def check_tiktok_live():
     settings = load_tiktok_settings()
-    username = settings.get("username")
-    if not username:
-        return
-    channel = bot.get_channel(TIKTOK_CHECK_CHANNEL_ID)
-    if not channel:
-        return
-    try:
-        result   = await _detect_tiktok_live(username)
-        is_live_now = result["is_live"]
-        was_live    = settings.get("is_live", False)
+    usernames = list(settings.get("usernames", {}).keys())
+    channel = get_tiktok_channel()
 
-        if result["blocked"]:
-            print(f"[TikTokLive] Kemungkinan diblokir/di-challenge TikTok untuk @{username} (html_len={result['html_len']})")
+    if not usernames or not channel:
+        return
 
-        if is_live_now and not was_live:
-            settings["is_live"] = True
-            save_tiktok_settings(settings)
-            embed = discord.Embed(
-                title=f"🔴 @{username} sedang LIVE di TikTok!",
-                description=f"👇\nhttps://www.tiktok.com/@{username}/live",
-                color=discord.Color.from_rgb(254, 44, 85),
-                timestamp=datetime.datetime.now(datetime.timezone.utc)
-            )
-            embed.set_footer(text="Asisten Lurah BFL • TikTok Live")
-            await channel.send(embed=embed)
-        elif not is_live_now and was_live:
-            settings["is_live"] = False
-            save_tiktok_settings(settings)
-    except Exception as e:
-        print(f"[TikTokLive] {e}")
+    for username in usernames:
+        try:
+            result = await _detect_tiktok_live(username)
+            is_live_now = result["is_live"]
+            was_live = settings["usernames"][username].get("is_live", False)
+
+            if result["blocked"]:
+                print(
+                    f"[TikTokLive] Kemungkinan diblokir/di-challenge TikTok "
+                    f"untuk @{username} (html_len={result['html_len']})"
+                )
+
+            if is_live_now and not was_live:
+                settings["usernames"][username]["is_live"] = True
+                save_tiktok_settings(settings)
+
+                await send_tiktok_live_notification(
+                    channel,
+                    username,
+                    result.get("thumbnail")
+                )
+
+            elif not is_live_now and was_live:
+                settings["usernames"][username]["is_live"] = False
+                save_tiktok_settings(settings)
+
+        except Exception as e:
+            print(f"[TikTokLive] @{username}: {e}")
+
 
 @check_tiktok_live.before_loop
 async def before_check_tiktok_live():
     await bot.wait_until_ready()
 
+
 @bot.command(name="checklive")
-async def check_live_manual(ctx):
-    """!checklive → Cek status live TikTok sekarang juga + tampilkan diagnostik (admin)."""
+async def check_live_manual(ctx, username: str = None):
+    """!checklive [username] → Cek status live TikTok sekarang + diagnostik."""
     if not is_admin(ctx.author):
-        return await ctx.send("❌ Hanya **Admin / Owner** yang bisa pakai ini.", delete_after=8)
-    settings = load_tiktok_settings()
-    username = settings.get("username")
-    if not username:
-        return await ctx.send("❌ Belum ada username TikTok yang diatur. Pakai `!settiktok <username>`.", delete_after=8)
-
-    msg = await ctx.send(f"🔎 Mengecek @{username}...")
-    try:
-        result = await _detect_tiktok_live(username)
-    except Exception as e:
-        return await msg.edit(content=f"❌ Gagal cek: `{e}`")
-
-    stored_is_live = settings.get("is_live", False)
-    channel_ok = bot.get_channel(TIKTOK_CHECK_CHANNEL_ID) is not None
-    mismatch = stored_is_live != result["is_live"]
-
-    diag = (
-        f"**Diagnostik @{username}**\n"
-        f"• HTTP status: `{result['status_code']}`\n"
-        f"• Final path: `{result['final_path']}`\n"
-        f"• Panjang HTML: `{result['html_len']}`\n"
-        f"• Ketemu status:2 (live): `{result['matched_status2']}`\n"
-        f"• Ketemu status:4 (offline): `{result['matched_status4']}`\n"
-        f"• Kemungkinan diblokir TikTok: `{result['blocked']}`\n"
-        f"• Channel notif ({TIKTOK_CHECK_CHANNEL_ID}) bisa diakses bot: `{channel_ok}`\n"
-        f"• Status tersimpan (dipakai loop): `{'LIVE' if stored_is_live else 'tidak live'}`\n"
-        f"• **Deteksi sekarang: {'🔴 LIVE' if result['is_live'] else '⚫ Tidak live'}**"
-    )
-    if mismatch:
-        diag += (
-            "\n\n⚠️ **Status tersimpan beda dengan deteksi sekarang.** Ini penyebab notif otomatis "
-            "tidak terkirim (notif cuma terkirim saat transisi tidak-live→live). "
-            "Jalankan `!synclive` untuk menyamakan state (dan langsung kirim notif kalau memang baru live)."
+        return await ctx.send(
+            "❌ Hanya **Admin / Owner** yang bisa pakai ini.",
+            delete_after=8
         )
-    await msg.edit(content=diag)
+
+    settings = load_tiktok_settings()
+    usernames = [normalize_tiktok_username(username)] if username else get_tiktok_usernames(settings)
+
+    if not usernames:
+        return await ctx.send(
+            "❌ Belum ada username TikTok. Pakai `!tiktok add <username>`.",
+            delete_after=8
+        )
+
+    lines = []
+    for name in usernames:
+        try:
+            result = await _detect_tiktok_live(name)
+            lines.append(
+                f"**@{name}**\n"
+                f"• HTTP: `{result['status_code']}`\n"
+                f"• Final path: `{result['final_path']}`\n"
+                f"• HTML: `{result['html_len']}`\n"
+                f"• status:2 LIVE: `{result['matched_status2']}`\n"
+                f"• status:4 OFFLINE: `{result['matched_status4']}`\n"
+                f"• Challenge/block: `{result['blocked']}`\n"
+                f"• Thumbnail: `{'ada' if result.get('thumbnail') else 'tidak ada'}`\n"
+                f"• **Deteksi: {'🔴 LIVE' if result['is_live'] else '⚫ Tidak live'}**"
+            )
+        except Exception as e:
+            lines.append(f"**@{name}** → ❌ `{e}`")
+
+    await ctx.send("\n\n".join(lines))
+
 
 @bot.command(name="synclive")
-async def sync_live_manual(ctx):
-    """!synclive → Samakan status live tersimpan dengan kondisi asli sekarang;
-    kirim notif langsung kalau ternyata baru live (admin)."""
+async def sync_live_manual(ctx, username: str = None):
+    """!synclive [username] → sinkronkan status dan kirim notif bila baru live."""
     if not is_admin(ctx.author):
-        return await ctx.send("❌ Hanya **Admin / Owner** yang bisa pakai ini.", delete_after=8)
+        return await ctx.send(
+            "❌ Hanya **Admin / Owner** yang bisa pakai ini.",
+            delete_after=8
+        )
+
     settings = load_tiktok_settings()
-    username = settings.get("username")
-    if not username:
-        return await ctx.send("❌ Belum ada username TikTok yang diatur. Pakai `!settiktok <username>`.", delete_after=8)
+    usernames = [normalize_tiktok_username(username)] if username else list(settings.get("usernames", {}).keys())
+    channel = get_tiktok_channel()
 
-    try:
-        result = await _detect_tiktok_live(username)
-    except Exception as e:
-        return await ctx.send(f"❌ Gagal cek: `{e}`")
+    if not usernames:
+        return await ctx.send(
+            "❌ Belum ada username TikTok. Pakai `!tiktok add <username>`."
+        )
+    if not channel:
+        return await ctx.send(
+            "❌ Channel notif tidak ditemukan. Pakai `!tiktok channel #channel`."
+        )
 
-    was_live = settings.get("is_live", False)
-    is_live_now = result["is_live"]
-    settings["is_live"] = is_live_now
+    sent = 0
+    for name in usernames:
+        # Add manually requested account to settings if it does not exist.
+        if name not in settings["usernames"]:
+            settings["usernames"][name] = {"is_live": False}
+
+        try:
+            result = await _detect_tiktok_live(name)
+            was_live = settings["usernames"][name].get("is_live", False)
+            settings["usernames"][name]["is_live"] = result["is_live"]
+
+            if result["is_live"] and not was_live:
+                await send_tiktok_live_notification(
+                    channel, name, result.get("thumbnail")
+                )
+                sent += 1
+        except Exception as e:
+            print(f"[TikTokSync] @{name}: {e}")
+
     save_tiktok_settings(settings)
+    await ctx.send(
+        f"✅ State TikTok disinkronkan. "
+        f"Notif baru dikirim: **{sent}**."
+    )
 
-    if is_live_now and not was_live:
-        channel = bot.get_channel(TIKTOK_CHECK_CHANNEL_ID)
-        if channel:
-            embed = discord.Embed(
-                title=f"🔴 @{username} sedang LIVE di TikTok!",
-                description=f"👇\nhttps://www.tiktok.com/@{username}/live",
-                color=discord.Color.from_rgb(254, 44, 85),
-                timestamp=datetime.datetime.now(datetime.timezone.utc)
-            )
-            embed.set_footer(text="Asisten Lurah BFL • TikTok Live")
-            await channel.send(embed=embed)
-            return await ctx.send(f"✅ State disinkronkan ke `LIVE` dan notif berhasil dikirim ke <#{TIKTOK_CHECK_CHANNEL_ID}>.")
-        return await ctx.send("⚠️ State disinkronkan ke `LIVE`, tapi bot **tidak bisa akses channel notif** (cek permission/ID channel).")
-
-    await ctx.send(f"✅ State disinkronkan: `{'LIVE' if is_live_now else 'tidak live'}` (tidak ada notif baru dikirim karena bukan transisi baru).")
 
 # ═══════════════════════════════════════════════════════
 #  COMMANDS — RANK & LEADERBOARD
+# ═══════════════════════════════════════════════════════
+
 # ═══════════════════════════════════════════════════════
 @bot.command(name="rank")
 async def rank(ctx, member: discord.Member = None):
