@@ -4544,13 +4544,19 @@ async def setoranlist_cmd(ctx):
 # ═══════════════════════════════════════════════════════
 PLAYER_PAGE_SIZE = 25   # jumlah pemain per halaman (dibagi 2 kolom sperti gambar)
 
-async def fetch_fivem_data():
+async def fetch_fivem_data(debug: list = None):
     """Ambil data pemain + info server. Coba API resmi FiveM (via join code) dulu — dapat
     ikon & banner otomatis — lalu fallback ke IP:PORT langsung kalau API resmi diblokir/gagal.
     Return dict ternormalisasi: {hostname, clients, sv_maxclients, players, icon_url, banner_url}
-    atau None jika keduanya gagal."""
+    atau None jika keduanya gagal.
+    Kalau list `debug` diberikan, alasan gagal tiap metode akan ditambahkan ke situ."""
     timeout = aiohttp.ClientTimeout(total=8)
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    def log(msg):
+        if debug is not None:
+            debug.append(msg)
+        print(f"[fetch_fivem_data] {msg}")
 
     # ── Coba 1: API resmi FiveM via join code ──
     if FIVEM_SERVER_CODE:
@@ -4572,8 +4578,16 @@ async def fetch_fivem_data():
                                 "icon_url":      (f"https://servers-frontend.fivem.net/api/servers/icon/{FIVEM_SERVER_CODE}/{icon_ver}.png" if icon_ver else None),
                                 "banner_url":    vars_.get("banner_detail") or vars_.get("banner_connecting"),
                             }
-        except Exception:
-            pass
+                        else:
+                            log(f"API resmi: status 200 tapi 'Data' kosong (server code '{FIVEM_SERVER_CODE}' salah/offline?)")
+                    else:
+                        log(f"API resmi: HTTP status {resp.status}")
+        except asyncio.TimeoutError:
+            log("API resmi: timeout (koneksi ke servers-frontend.fivem.net lambat/diblokir)")
+        except Exception as e:
+            log(f"API resmi: exception {type(e).__name__}: {e}")
+    else:
+        log("API resmi: FIVEM_SERVER_CODE kosong, dilewati")
 
     # ── Fallback: IP:PORT langsung ──
     if FIVEM_SERVER_IP:
@@ -4582,10 +4596,12 @@ async def fetch_fivem_data():
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(f"{base}/dynamic.json") as resp:
                     if resp.status != 200:
+                        log(f"IP:PORT: dynamic.json HTTP status {resp.status}")
                         return None
                     dynamic_data = await resp.json(content_type=None)
                 async with session.get(f"{base}/players.json") as resp:
                     if resp.status != 200:
+                        log(f"IP:PORT: players.json HTTP status {resp.status}")
                         return None
                     players_data = await resp.json(content_type=None)
             hostname = re.sub(r"\^[0-9]", "", dynamic_data.get("hostname", FIVEM_SERVER_NAME))
@@ -4597,8 +4613,14 @@ async def fetch_fivem_data():
                 "icon_url":      None,
                 "banner_url":    None,
             }
-        except Exception:
+        except asyncio.TimeoutError:
+            log(f"IP:PORT: timeout menghubungi {FIVEM_SERVER_IP} (port ditutup/diblokir hosting?)")
             return None
+        except Exception as e:
+            log(f"IP:PORT: exception {type(e).__name__}: {e}")
+            return None
+    else:
+        log("IP:PORT: FIVEM_SERVER_IP kosong, dilewati")
 
     return None
 
@@ -4707,9 +4729,11 @@ async def player_finder_cmd(ctx, *, keyword: str = None):
 
     msg = await ctx.send("🔄 Mengambil data server, mohon tunggu...")
 
-    info = await fetch_fivem_data()
+    debug_log = []
+    info = await fetch_fivem_data(debug=debug_log)
     if info is None:
-        return await msg.edit(content="❌ Gagal mengambil data server. Server mungkin sedang offline, atau kedua metode (API resmi & IP:PORT) diblokir.")
+        detail = "\n".join(f"• {d}" for d in debug_log) or "(tidak ada detail)"
+        return await msg.edit(content=f"❌ Gagal mengambil data server. Detail:\n{detail}")
 
     players_data = info.get("players", [])
     keyword_low = keyword.lower()
