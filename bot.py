@@ -1198,6 +1198,57 @@ async def check_tiktok():
 async def before_tiktok():
     await bot.wait_until_ready()
 
+TIKTOK_LIVE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+    "Referer": "https://www.tiktok.com/",
+}
+
+async def _detect_tiktok_live(username: str) -> dict:
+    """Cek apakah @username sedang live. Return dict diagnostik:
+    {is_live, status_code, final_path, html_len, matched_status2, matched_status4, blocked}"""
+    url = f"https://www.tiktok.com/@{username}/live"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            url, headers=TIKTOK_LIVE_HEADERS,
+            timeout=aiohttp.ClientTimeout(total=10),
+            allow_redirects=True
+        ) as resp:
+            html   = await resp.text()
+            status = resp.status
+            final_path = resp.url.path if resp.url else ""
+
+    matched_status2 = bool(re.search(r'"status"\s*:\s*2\b', html))
+    matched_status4 = bool(re.search(r'"status"\s*:\s*4\b', html))
+    # Kalau TikTok redirect balik ke halaman profil (bukan /live lagi),
+    # itu tanda paling kuat bahwa akun sedang TIDAK live — walaupun regex JSON gagal ketemu.
+    redirected_away = "/live" not in final_path
+    # Tanda halaman diblokir/di-challenge (bukan HTML normal TikTok)
+    blocked = html.strip() == "" or ("captcha" in html.lower() and "tiktok" not in html.lower()[:2000])
+
+    if redirected_away:
+        is_live = False
+    elif matched_status2 and not matched_status4:
+        is_live = True
+    else:
+        is_live = False
+
+    return {
+        "is_live": is_live,
+        "status_code": status,
+        "final_path": final_path,
+        "html_len": len(html),
+        "matched_status2": matched_status2,
+        "matched_status4": matched_status4,
+        "blocked": blocked,
+    }
+
 @tasks.loop(minutes=5)
 async def check_tiktok_live():
     settings = load_tiktok_settings()
@@ -1208,23 +1259,19 @@ async def check_tiktok_live():
     if not channel:
         return
     try:
-        url     = f"https://www.tiktok.com/@{username}/live"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                html = await resp.text()
-
-        # Deteksi status live dari data yang di-embed TikTok di halaman /live.
-        # "status":2 = sedang live, "status":4 = sudah berakhir/offline.
-        is_live_now = bool(re.search(r'"status"\s*:\s*2\b', html)) and not re.search(r'"status"\s*:\s*4\b', html)
+        result   = await _detect_tiktok_live(username)
+        is_live_now = result["is_live"]
         was_live    = settings.get("is_live", False)
+
+        if result["blocked"]:
+            print(f"[TikTokLive] Kemungkinan diblokir/di-challenge TikTok untuk @{username} (html_len={result['html_len']})")
 
         if is_live_now and not was_live:
             settings["is_live"] = True
             save_tiktok_settings(settings)
             embed = discord.Embed(
                 title=f"🔴 @{username} sedang LIVE di TikTok!",
-                description=f"👇\n{url}",
+                description=f"👇\nhttps://www.tiktok.com/@{username}/live",
                 color=discord.Color.from_rgb(254, 44, 85),
                 timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
@@ -1239,6 +1286,34 @@ async def check_tiktok_live():
 @check_tiktok_live.before_loop
 async def before_check_tiktok_live():
     await bot.wait_until_ready()
+
+@bot.command(name="checklive")
+async def check_live_manual(ctx):
+    """!checklive → Cek status live TikTok sekarang juga + tampilkan diagnostik (admin)."""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya **Admin / Owner** yang bisa pakai ini.", delete_after=8)
+    settings = load_tiktok_settings()
+    username = settings.get("username")
+    if not username:
+        return await ctx.send("❌ Belum ada username TikTok yang diatur. Pakai `!settiktok <username>`.", delete_after=8)
+
+    msg = await ctx.send(f"🔎 Mengecek @{username}...")
+    try:
+        result = await _detect_tiktok_live(username)
+    except Exception as e:
+        return await msg.edit(content=f"❌ Gagal cek: `{e}`")
+
+    diag = (
+        f"**Diagnostik @{username}**\n"
+        f"• HTTP status: `{result['status_code']}`\n"
+        f"• Final path: `{result['final_path']}`\n"
+        f"• Panjang HTML: `{result['html_len']}`\n"
+        f"• Ketemu status:2 (live): `{result['matched_status2']}`\n"
+        f"• Ketemu status:4 (offline): `{result['matched_status4']}`\n"
+        f"• Kemungkinan diblokir TikTok: `{result['blocked']}`\n"
+        f"• **Kesimpulan: {'🔴 LIVE' if result['is_live'] else '⚫ Tidak live'}**"
+    )
+    await msg.edit(content=diag)
 
 # ═══════════════════════════════════════════════════════
 #  COMMANDS — RANK & LEADERBOARD
