@@ -15,6 +15,11 @@ TIKTOK_CHECK_CHANNEL_ID = int(os.environ["TIKTOK_CHECK_CHANNEL_ID"])
 TICKET_CHANNEL_ID       = int(os.environ["TICKET_CHANNEL_ID"])
 VOICE_CATEGORY_ID       = int(os.environ["VOICE_CATEGORY_ID"])
 
+# FiveM Player Finder
+FIVEM_SERVER_CODE   = os.environ.get("FIVEM_SERVER_CODE", "zrvmg4")            # join code cfx.re/join/<code>
+FIVEM_SERVER_IP     = os.environ.get("FIVEM_SERVER_IP", "49.128.187.182:30120") # fallback IP:PORT kalau API resmi diblokir
+FIVEM_SERVER_NAME   = os.environ.get("FIVEM_SERVER_NAME", "iMe RP")
+
 WIB = pytz.timezone("Asia/Jakarta")
 
 # ═══════════════════════════════════════════════════════
@@ -4532,6 +4537,196 @@ async def setoranlist_cmd(ctx):
             "📋 Belum ada setoran metalscrap minggu ini. Catat dengan `!setoran`"
         )
     await ctx.send(embed=_setoran_list_embed(data, "Reset otomatis tiap Senin 00.00 WIB • Asisten Lurah BFL"))
+
+
+# ═══════════════════════════════════════════════════════
+#  FIVEM PLAYER FINDER
+# ═══════════════════════════════════════════════════════
+PLAYER_PAGE_SIZE = 25   # jumlah pemain per halaman (dibagi 2 kolom sperti gambar)
+
+async def fetch_fivem_data():
+    """Ambil data pemain + info server. Coba API resmi FiveM (via join code) dulu — dapat
+    ikon & banner otomatis — lalu fallback ke IP:PORT langsung kalau API resmi diblokir/gagal.
+    Return dict ternormalisasi: {hostname, clients, sv_maxclients, players, icon_url, banner_url}
+    atau None jika keduanya gagal."""
+    timeout = aiohttp.ClientTimeout(total=8)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    # ── Coba 1: API resmi FiveM via join code ──
+    if FIVEM_SERVER_CODE:
+        try:
+            url = f"https://servers-frontend.fivem.net/api/servers/single/{FIVEM_SERVER_CODE}"
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        raw = await resp.json(content_type=None)
+                        data = raw.get("Data", {})
+                        if data:
+                            icon_ver = data.get("iconVersion")
+                            vars_    = data.get("vars", {}) or {}
+                            return {
+                                "hostname":      data.get("hostname", FIVEM_SERVER_NAME),
+                                "clients":       data.get("clients", "?"),
+                                "sv_maxclients": data.get("sv_maxclients", "?"),
+                                "players":       data.get("players", []),
+                                "icon_url":      (f"https://servers-frontend.fivem.net/api/servers/icon/{FIVEM_SERVER_CODE}/{icon_ver}.png" if icon_ver else None),
+                                "banner_url":    vars_.get("banner_detail") or vars_.get("banner_connecting"),
+                            }
+        except Exception:
+            pass
+
+    # ── Fallback: IP:PORT langsung ──
+    if FIVEM_SERVER_IP:
+        try:
+            base = f"http://{FIVEM_SERVER_IP}"
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(f"{base}/dynamic.json") as resp:
+                    if resp.status != 200:
+                        return None
+                    dynamic_data = await resp.json(content_type=None)
+                async with session.get(f"{base}/players.json") as resp:
+                    if resp.status != 200:
+                        return None
+                    players_data = await resp.json(content_type=None)
+            hostname = re.sub(r"\^[0-9]", "", dynamic_data.get("hostname", FIVEM_SERVER_NAME))
+            return {
+                "hostname":      hostname,
+                "clients":       dynamic_data.get("clients", "?"),
+                "sv_maxclients": dynamic_data.get("sv_maxclients", "?"),
+                "players":       players_data,
+                "icon_url":      None,
+                "banner_url":    None,
+            }
+        except Exception:
+            return None
+
+    return None
+
+def _ping_dot(ping: int) -> str:
+    """Bulat warna berdasarkan ping, sama seperti di gambar referensi."""
+    if ping < 60:
+        return "🟢"
+    elif ping < 100:
+        return "🟡"
+    else:
+        return "🔴"
+
+def _build_player_header_embed(info: dict, keyword: str, total_found: int) -> discord.Embed:
+    hostname = info.get("hostname", FIVEM_SERVER_NAME) if info else FIVEM_SERVER_NAME
+    clients  = info.get("clients", "?") if info else "?"
+    max_cl   = info.get("sv_maxclients", "?") if info else "?"
+
+    embed = discord.Embed(
+        title="🔍 FiveM Player Finder",
+        color=discord.Color.orange(),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+    embed.add_field(
+        name="\u200b",
+        value=(
+            f"🔎 **{FIVEM_SERVER_NAME} — Mencari:** *{keyword}*\n\n"
+            f"💻 **{hostname}**\n"
+            f"👥 **{clients}/{max_cl} Pemain Online**"
+        ),
+        inline=False
+    )
+    if info and info.get("banner_url"):
+        embed.set_image(url=info["banner_url"])
+    if info and info.get("icon_url"):
+        embed.set_thumbnail(url=info["icon_url"])
+    embed.set_footer(text=f"Total: {total_found} pemain • Real-time Data")
+    return embed
+
+def _build_player_list_embed(matches: list, page: int, total_pages: int) -> discord.Embed:
+    start = page * PLAYER_PAGE_SIZE
+    chunk = matches[start:start + PLAYER_PAGE_SIZE]
+    mid   = math.ceil(len(chunk) / 2)
+    col1, col2 = chunk[:mid], chunk[mid:]
+
+    def fmt_col(players):
+        if not players:
+            return "_Kosong_"
+        lines = []
+        for p in players:
+            dot = _ping_dot(p.get("ping", 0))
+            lines.append(f"{dot} `{p.get('id')}` {p.get('name')} `{p.get('ping')}ms`")
+        return "\n".join(lines)
+
+    embed = discord.Embed(
+        title=f"👥 Pemain {start + 1}-{start + len(chunk)}",
+        color=discord.Color.orange()
+    )
+    embed.add_field(name="📋 Grup 1", value=fmt_col(col1), inline=True)
+    embed.add_field(name="📋 Grup 2", value=fmt_col(col2), inline=True)
+    embed.set_footer(text=f"📄 Halaman {page + 1}/{total_pages}")
+    return embed
+
+class PlayerFinderView(View):
+    def __init__(self, matches: list, author_id: int):
+        super().__init__(timeout=120)
+        self.matches      = matches
+        self.author_id    = author_id
+        self.page         = 0
+        self.total_pages  = max(1, math.ceil(len(matches) / PLAYER_PAGE_SIZE))
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.prev_btn.disabled = self.page <= 0
+        self.next_btn.disabled = self.page >= self.total_pages - 1
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Hanya yang menjalankan command ini yang bisa navigasi halaman.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="◀ Sebelumnya", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: Button):
+        self.page -= 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=_build_player_list_embed(self.matches, self.page, self.total_pages), view=self)
+
+    @discord.ui.button(label="Selanjutnya ▶", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: Button):
+        self.page += 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=_build_player_list_embed(self.matches, self.page, self.total_pages), view=self)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+@bot.command(name="player")
+async def player_finder_cmd(ctx, *, keyword: str = None):
+    """
+    !player <keyword>  → Cari pemain online di server FiveM berdasarkan nama.
+    Contoh: !player bfl
+    """
+    if not keyword:
+        return await ctx.send("❌ Masukkan nama yang mau dicari. Contoh: `!player bfl`", delete_after=10)
+
+    msg = await ctx.send("🔄 Mengambil data server, mohon tunggu...")
+
+    info = await fetch_fivem_data()
+    if info is None:
+        return await msg.edit(content="❌ Gagal mengambil data server. Server mungkin sedang offline, atau kedua metode (API resmi & IP:PORT) diblokir.")
+
+    players_data = info.get("players", [])
+    keyword_low = keyword.lower()
+    matches = [p for p in players_data if keyword_low in str(p.get("name", "")).lower()]
+
+    if not matches:
+        return await msg.edit(content=f"❌ Tidak ada pemain dengan nama mengandung **{keyword}**.")
+
+    matches.sort(key=lambda p: str(p.get("name", "")).lower())
+
+    header_embed = _build_player_header_embed(info, keyword, len(matches))
+    view = PlayerFinderView(matches, ctx.author.id)
+    list_embed = _build_player_list_embed(matches, 0, view.total_pages)
+
+    await msg.delete()
+    await ctx.send(embed=header_embed)
+    await ctx.send(embed=list_embed, view=view)
 
 
 bot.run(TOKEN)
