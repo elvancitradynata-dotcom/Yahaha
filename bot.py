@@ -1303,6 +1303,10 @@ async def check_live_manual(ctx):
     except Exception as e:
         return await msg.edit(content=f"❌ Gagal cek: `{e}`")
 
+    stored_is_live = settings.get("is_live", False)
+    channel_ok = bot.get_channel(TIKTOK_CHECK_CHANNEL_ID) is not None
+    mismatch = stored_is_live != result["is_live"]
+
     diag = (
         f"**Diagnostik @{username}**\n"
         f"• HTTP status: `{result['status_code']}`\n"
@@ -1311,9 +1315,54 @@ async def check_live_manual(ctx):
         f"• Ketemu status:2 (live): `{result['matched_status2']}`\n"
         f"• Ketemu status:4 (offline): `{result['matched_status4']}`\n"
         f"• Kemungkinan diblokir TikTok: `{result['blocked']}`\n"
-        f"• **Kesimpulan: {'🔴 LIVE' if result['is_live'] else '⚫ Tidak live'}**"
+        f"• Channel notif ({TIKTOK_CHECK_CHANNEL_ID}) bisa diakses bot: `{channel_ok}`\n"
+        f"• Status tersimpan (dipakai loop): `{'LIVE' if stored_is_live else 'tidak live'}`\n"
+        f"• **Deteksi sekarang: {'🔴 LIVE' if result['is_live'] else '⚫ Tidak live'}**"
     )
+    if mismatch:
+        diag += (
+            "\n\n⚠️ **Status tersimpan beda dengan deteksi sekarang.** Ini penyebab notif otomatis "
+            "tidak terkirim (notif cuma terkirim saat transisi tidak-live→live). "
+            "Jalankan `!synclive` untuk menyamakan state (dan langsung kirim notif kalau memang baru live)."
+        )
     await msg.edit(content=diag)
+
+@bot.command(name="synclive")
+async def sync_live_manual(ctx):
+    """!synclive → Samakan status live tersimpan dengan kondisi asli sekarang;
+    kirim notif langsung kalau ternyata baru live (admin)."""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya **Admin / Owner** yang bisa pakai ini.", delete_after=8)
+    settings = load_tiktok_settings()
+    username = settings.get("username")
+    if not username:
+        return await ctx.send("❌ Belum ada username TikTok yang diatur. Pakai `!settiktok <username>`.", delete_after=8)
+
+    try:
+        result = await _detect_tiktok_live(username)
+    except Exception as e:
+        return await ctx.send(f"❌ Gagal cek: `{e}`")
+
+    was_live = settings.get("is_live", False)
+    is_live_now = result["is_live"]
+    settings["is_live"] = is_live_now
+    save_tiktok_settings(settings)
+
+    if is_live_now and not was_live:
+        channel = bot.get_channel(TIKTOK_CHECK_CHANNEL_ID)
+        if channel:
+            embed = discord.Embed(
+                title=f"🔴 @{username} sedang LIVE di TikTok!",
+                description=f"👇\nhttps://www.tiktok.com/@{username}/live",
+                color=discord.Color.from_rgb(254, 44, 85),
+                timestamp=datetime.datetime.now(datetime.timezone.utc)
+            )
+            embed.set_footer(text="Asisten Lurah BFL • TikTok Live")
+            await channel.send(embed=embed)
+            return await ctx.send(f"✅ State disinkronkan ke `LIVE` dan notif berhasil dikirim ke <#{TIKTOK_CHECK_CHANNEL_ID}>.")
+        return await ctx.send("⚠️ State disinkronkan ke `LIVE`, tapi bot **tidak bisa akses channel notif** (cek permission/ID channel).")
+
+    await ctx.send(f"✅ State disinkronkan: `{'LIVE' if is_live_now else 'tidak live'}` (tidak ada notif baru dikirim karena bukan transisi baru).")
 
 # ═══════════════════════════════════════════════════════
 #  COMMANDS — RANK & LEADERBOARD
