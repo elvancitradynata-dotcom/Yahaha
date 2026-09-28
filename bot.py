@@ -212,7 +212,7 @@ def is_admin(member) -> bool:
                 return True
     return False
 
-MODERATOR_FILE = "moderators.json"
+MODERATOR_FILE = _p("moderators.json")
 
 def load_moderators() -> list:
     return load_json(MODERATOR_FILE, default=[
@@ -939,6 +939,10 @@ async def on_ready():
     check_tiktok_live.start()
     check_giveaways.start()
     check_setoran_reset.start()
+    if not check_trial_roles.is_running():
+        check_trial_roles.start()
+    if BACKUP_CHANNEL_ID and not auto_backup_settings.is_running():
+        auto_backup_settings.start()
     print(f"✅ Semua sistem aktif. Logged in as {bot.user}")
 
 @bot.event
@@ -1150,7 +1154,7 @@ async def before_check_giveaways():
 # ═══════════════════════════════════════════════════════
 #  TASKS — TIKTOK
 # ═══════════════════════════════════════════════════════
-TIKTOK_SETTINGS_FILE = "tiktok_settings.json"
+TIKTOK_SETTINGS_FILE = _p("tiktok_settings.json")
 
 def load_tiktok_settings() -> dict:
     """Load TikTok configuration with backward compatibility."""
@@ -2395,6 +2399,15 @@ async def help_admin_cmd(ctx):
     embed.add_field(name="👤 Info User",
         value=("`!userinfo [@user]` / `!cekuser` — Cek info lengkap user\n"
                "📌 Menampilkan: kapan join, estimasi pesan, level, XP, warn, roles, banner"), inline=False)
+    embed.add_field(name="⏳ Trial Role",
+        value=("`!trialrole @user @role <durasi>` — Beri role sementara (`30m`, `12h`, `3d`, `1w`, `1d12h`)\n"
+               "`!trialrole list [@user]` — Daftar trial yang sedang aktif\n"
+               "`!trialrole cancel @user [@role]` — Hentikan trial & cabut role sekarang\n"
+               "📌 Role otomatis dicabut saat masa trial habis"), inline=False)
+    embed.add_field(name="💾 Save / Load Setting",
+        value=("`!savesettings` — Simpan semua setting & data ke channel backup\n"
+               "`!loadsettings` — Load setting dari backup terakhir (timpa data sekarang)\n"
+               "📌 Auto-backup berkala & auto-load saat bot deploy ulang"), inline=False)
     embed.add_field(name="🏓 Ping & Koneksi",
         value=("`!ping` — Cek latensi bot, ping server Discord, dan status koneksi"), inline=False)
     embed.set_footer(text="Asisten Lurah BFL • Hanya terlihat oleh Admin/Owner")
@@ -3650,7 +3663,7 @@ async def absen_cmd(ctx):
 # ═══════════════════════════════════════════════════════
 #  AUTO REPLY SYSTEM
 # ═══════════════════════════════════════════════════════
-AUTOREPLY_FILE = "autoreply.json"
+AUTOREPLY_FILE = _p("autoreply.json")
 
 def load_autoreply():
     if not os.path.exists(AUTOREPLY_FILE):
@@ -4116,7 +4129,7 @@ async def reminder_cmd(ctx, waktu: str = None, *, pesan: str = "Waktunya!"):
 # ═══════════════════════════════════════════════════════
 #  SISTEM !LISTCASE — DAFTAR CASE / AGENDA PEMBAHASAN
 # ═══════════════════════════════════════════════════════
-CASE_FILE = "listcase.json"
+CASE_FILE = _p("listcase.json")
 
 def load_cases() -> list:
     if os.path.exists(CASE_FILE):
@@ -4509,6 +4522,429 @@ async def setoranlist_cmd(ctx):
             "📋 Belum ada setoran metalscrap minggu ini. Catat dengan `!setoran`"
         )
     await ctx.send(embed=_setoran_list_embed(data, "Reset otomatis tiap Senin 00.00 WIB • Asisten Lurah BFL"))
+
+
+# ═══════════════════════════════════════════════════════
+#  TRIAL ROLE — beri role sementara, otomatis dicabut saat habis
+# ═══════════════════════════════════════════════════════
+import time as _time, zipfile, hashlib
+
+TRIAL_ROLE_FILE = _p("trial_roles.json")
+TRIAL_MAX_SECONDS = 365 * 86400
+
+def load_trials():    return load_json(TRIAL_ROLE_FILE, default={})
+def save_trials(d):   save_json(TRIAL_ROLE_FILE, d)
+
+def _parse_trial_duration(s: str):
+    """'30m', '12h', '3d', '1w', '1d12h' -> detik. None kalau format salah."""
+    if not s:
+        return None
+    s = s.lower().replace(" ", "")
+    if not re.fullmatch(r"(\d+[wdhm])+", s):
+        return None
+    mult = {"w": 604800, "d": 86400, "h": 3600, "m": 60}
+    total = sum(int(n) * mult[u] for n, u in re.findall(r"(\d+)([wdhm])", s))
+    return total if total > 0 else None
+
+def _fmt_duration(seconds: int) -> str:
+    seconds = int(seconds)
+    parts = []
+    for label, size in (("hari", 86400), ("jam", 3600), ("menit", 60)):
+        if seconds >= size:
+            parts.append(f"{seconds // size} {label}")
+            seconds %= size
+    return " ".join(parts) if parts else "kurang dari 1 menit"
+
+def _trial_key(guild_id, user_id, role_id) -> str:
+    return f"{guild_id}:{user_id}:{role_id}"
+
+@bot.group(name="trialrole", aliases=["trial"], invoke_without_command=True)
+async def trialrole_cmd(ctx, member: discord.Member = None, role: discord.Role = None, *, durasi: str = None):
+    """!trialrole @user @role <durasi>  — contoh: !trialrole @Budi @VIP 3d"""
+    if not ctx.guild:
+        return await ctx.send("⚠️ Command ini hanya bisa dipakai di server.")
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya **Admin / Owner** yang bisa memberi trial role.", delete_after=8)
+
+    if member is None or role is None or durasi is None:
+        embed = discord.Embed(
+            title="⏳ Cara Pakai !trialrole",
+            description=(
+                "`!trialrole @user @role <durasi>` — Beri role sementara\n"
+                "`!trialrole list [@user]` — Lihat trial yang aktif\n"
+                "`!trialrole cancel @user [@role]` — Hentikan trial sekarang\n\n"
+                "**Contoh durasi:** `30m`, `12h`, `3d`, `1w`, `1d12h`\n"
+                "`m` = menit | `h` = jam | `d` = hari | `w` = minggu\n"
+                "⏳ Maksimal: **365 hari**"
+            ),
+            color=discord.Color.blue()
+        )
+        return await ctx.send(embed=embed, delete_after=30)
+
+    secs = _parse_trial_duration(durasi)
+    if not secs:
+        return await ctx.send("❌ Format durasi salah. Contoh: `30m`, `12h`, `3d`, `1w`, `1d12h`", delete_after=10)
+    if secs > TRIAL_MAX_SECONDS:
+        return await ctx.send("❌ Durasi maksimal **365 hari**.", delete_after=10)
+
+    if role.is_default() or role.managed:
+        return await ctx.send("❌ Role itu tidak bisa diberikan (default/managed oleh bot atau integrasi).", delete_after=10)
+    if role >= ctx.guild.me.top_role:
+        return await ctx.send("❌ Role itu lebih tinggi/sama dengan role tertinggi bot. Naikkan role bot di pengaturan server.", delete_after=12)
+    if ctx.author.id != OWNER_ID and ctx.author != ctx.guild.owner and role >= ctx.author.top_role:
+        return await ctx.send("❌ Kamu tidak bisa memberi role yang lebih tinggi/sama dengan role tertinggimu.", delete_after=10)
+
+    key = _trial_key(ctx.guild.id, member.id, role.id)
+    trials = load_trials()
+    existing = trials.get(key)
+    has_role = role in member.roles
+
+    if has_role and not existing:
+        return await ctx.send(
+            f"❌ {member.mention} sudah punya role **{role.name}** secara permanen. Trial dibatalkan supaya rolenya tidak ikut tercabut.",
+            delete_after=12
+        )
+
+    if not has_role:
+        try:
+            await member.add_roles(role, reason=f"Trial role {durasi} oleh {ctx.author}")
+        except discord.Forbidden:
+            return await ctx.send("❌ Bot tidak punya izin untuk memberi role itu.", delete_after=10)
+        except discord.HTTPException as e:
+            return await ctx.send(f"❌ Gagal memberi role: {e}", delete_after=10)
+
+    expires_at = int(_time.time()) + secs
+    trials[key] = {
+        "guild_id": ctx.guild.id,
+        "user_id": member.id,
+        "role_id": role.id,
+        "expires_at": expires_at,
+        "given_by": ctx.author.id,
+        "channel_id": ctx.channel.id,
+    }
+    save_trials(trials)
+
+    embed = discord.Embed(
+        title="⏳ Trial Role " + ("Diperbarui" if existing else "Diberikan"),
+        color=discord.Color.green()
+    )
+    embed.add_field(name="Member", value=member.mention, inline=True)
+    embed.add_field(name="Role", value=role.mention, inline=True)
+    embed.add_field(name="Durasi", value=_fmt_duration(secs), inline=True)
+    embed.add_field(name="Berakhir", value=f"<t:{expires_at}:F> (<t:{expires_at}:R>)", inline=False)
+    embed.set_footer(text="Asisten Lurah BFL • Role otomatis dicabut saat habis")
+    await ctx.send(embed=embed)
+
+@trialrole_cmd.command(name="list", aliases=["daftar"])
+async def trialrole_list(ctx, member: discord.Member = None):
+    if not ctx.guild:
+        return await ctx.send("⚠️ Command ini hanya bisa dipakai di server.")
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya **Admin / Owner**.", delete_after=8)
+    rows = [t for t in load_trials().values()
+            if int(t["guild_id"]) == ctx.guild.id and (member is None or int(t["user_id"]) == member.id)]
+    if not rows:
+        return await ctx.send("📋 Tidak ada trial role yang aktif.")
+    rows.sort(key=lambda t: t["expires_at"])
+    lines = [f"<@{t['user_id']}> — <@&{t['role_id']}> — habis <t:{t['expires_at']}:R>" for t in rows[:25]]
+    if len(rows) > 25:
+        lines.append(f"... dan {len(rows) - 25} lainnya")
+    embed = discord.Embed(title=f"⏳ Trial Role Aktif ({len(rows)})", description="\n".join(lines), color=discord.Color.blurple())
+    await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+@trialrole_cmd.command(name="cancel", aliases=["batal", "stop", "hapus"])
+async def trialrole_cancel(ctx, member: discord.Member, role: discord.Role = None):
+    if not ctx.guild:
+        return await ctx.send("⚠️ Command ini hanya bisa dipakai di server.")
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya **Admin / Owner**.", delete_after=8)
+    trials = load_trials()
+    keys = [k for k, t in trials.items()
+            if int(t["guild_id"]) == ctx.guild.id and int(t["user_id"]) == member.id
+            and (role is None or int(t["role_id"]) == role.id)]
+    if not keys:
+        return await ctx.send("❌ Tidak ada trial aktif yang cocok.", delete_after=8)
+    names = []
+    for k in keys:
+        r = ctx.guild.get_role(int(trials[k]["role_id"]))
+        if r and r in member.roles:
+            try:
+                await member.remove_roles(r, reason=f"Trial role dibatalkan oleh {ctx.author}")
+            except discord.HTTPException as e:
+                await ctx.send(f"⚠️ Gagal mencabut **{r.name}**: {e}", delete_after=10)
+                continue
+        names.append(r.name if r else f"ID {trials[k]['role_id']}")
+        trials.pop(k, None)
+    save_trials(trials)
+    if names:
+        await ctx.send(f"🛑 Trial dihentikan untuk {member.mention}: **{', '.join(names)}**", allowed_mentions=discord.AllowedMentions.none())
+
+@tasks.loop(seconds=60)
+async def check_trial_roles():
+    trials = load_trials()
+    if not trials:
+        return
+    now = int(_time.time())
+    changed = False
+    for key, t in list(trials.items()):
+        if t["expires_at"] > now:
+            continue
+        guild = bot.get_guild(int(t["guild_id"]))
+        if guild is None:
+            continue  # guild belum ter-cache / bot sudah keluar; coba lagi nanti
+        role = guild.get_role(int(t["role_id"]))
+        if role is None:
+            trials.pop(key, None); changed = True
+            continue
+        member = guild.get_member(int(t["user_id"]))
+        if member is None:
+            try:
+                member = await guild.fetch_member(int(t["user_id"]))
+            except discord.NotFound:
+                trials.pop(key, None); changed = True  # member sudah keluar
+                continue
+            except discord.HTTPException:
+                continue
+        if role in member.roles:
+            try:
+                await member.remove_roles(role, reason="Masa trial role habis")
+            except discord.Forbidden:
+                print(f"[Trial] Tidak punya izin mencabut {role.name} dari {member}. Entri dihapus.")
+                trials.pop(key, None); changed = True
+                continue
+            except discord.HTTPException as e:
+                print(f"[Trial] Gagal mencabut role (akan dicoba lagi): {e}")
+                continue
+        trials.pop(key, None); changed = True
+
+        try:
+            await member.send(f"⏰ Masa trial role **{role.name}** kamu di **{guild.name}** sudah habis.")
+        except Exception:
+            pass
+        ch = guild.get_channel(int(t.get("channel_id", 0) or 0))
+        if ch:
+            try:
+                await ch.send(
+                    f"⏰ Trial role **{role.name}** untuk {member.mention} sudah habis dan rolenya dicabut.",
+                    allowed_mentions=discord.AllowedMentions.none()
+                )
+            except Exception:
+                pass
+    if changed:
+        save_trials(trials)
+
+@check_trial_roles.before_loop
+async def before_check_trial_roles():
+    await bot.wait_until_ready()
+
+
+# ═══════════════════════════════════════════════════════
+#  SAVE / LOAD SETTING — backup ke channel Discord, auto-load saat deploy
+# ═══════════════════════════════════════════════════════
+# Cara kerja:
+#  - Semua file JSON di-zip lalu di-upload ke channel privat (BACKUP_CHANNEL_ID).
+#  - Saat bot start, file yang HILANG di disk otomatis di-load dari backup terbaru.
+#    File yang sudah ada (misal dari Railway Volume) TIDAK ditimpa.
+#  - Auto-backup berkala (BACKUP_INTERVAL_MIN, default 30 menit) hanya kalau ada perubahan.
+BACKUP_CHANNEL_ID   = int(os.environ.get("BACKUP_CHANNEL_ID", "0") or 0)
+BACKUP_INTERVAL_MIN = max(5, int(os.environ.get("BACKUP_INTERVAL_MIN", "30") or 30))
+BACKUP_KEEP         = 5
+BACKUP_PREFIX       = "YAHAHA_BACKUP"
+BACKUP_MAX_BYTES    = 25 * 1024 * 1024
+
+_backup_ready = False       # True setelah pengecekan restore saat startup selesai tanpa error
+_last_backup_hash = None
+
+def _backup_paths() -> list:
+    return [
+        DATA_FILE, LAST_TIKTOK_FILE, YOUTUBE_FILE, TICKET_FILE, VERIF_FILE, WARN_FILE,
+        GIVEAWAY_FILE, QUOTE_FILE, SETTINGS_FILE, AFK_FILE, BANNER_FILE, CUSTOM_CMD_FILE,
+        REACT_ROLE_FILE, AUTOMOD_FILE, WELCOME_CFG_FILE, POLLS_FILE, JOIN_TRACKING_FILE,
+        MODERATOR_FILE, TIKTOK_SETTINGS_FILE, AUTOREPLY_FILE, CASE_FILE, SETORAN_FILE,
+        TRIAL_ROLE_FILE,
+    ]
+
+def _snapshot() -> dict:
+    snap = {}
+    for path in _backup_paths():
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                snap[os.path.basename(path)] = f.read()
+    return snap
+
+def _snapshot_hash(snap: dict) -> str:
+    h = hashlib.sha256()
+    for name in sorted(snap):
+        h.update(name.encode()); h.update(b"\0"); h.update(snap[name]); h.update(b"\0")
+    return h.hexdigest()
+
+def _build_zip(snap: dict) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, content in snap.items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+def _restore_from_zip(data: bytes, overwrite: bool):
+    """Return (restored, skipped). Hanya file JSON yang dikenal & valid yang dipulihkan."""
+    allowed = {os.path.basename(p): p for p in _backup_paths()}
+    restored, skipped = [], []
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for info in zf.infolist():
+            base = os.path.basename(info.filename)
+            if base not in allowed or info.file_size > BACKUP_MAX_BYTES:
+                continue
+            dest = allowed[base]
+            if os.path.exists(dest) and not overwrite:
+                skipped.append(base)
+                continue
+            content = zf.read(info)
+            try:
+                json.loads(content.decode("utf-8"))
+            except Exception:
+                skipped.append(base)
+                continue
+            tmp = f"{dest}.tmp"
+            with open(tmp, "wb") as f:
+                f.write(content)
+            os.replace(tmp, dest)
+            restored.append(base)
+    return restored, skipped
+
+async def _get_backup_channel():
+    return bot.get_channel(BACKUP_CHANNEL_ID) or await bot.fetch_channel(BACKUP_CHANNEL_ID)
+
+async def _find_latest_backup(channel):
+    async for m in channel.history(limit=100):
+        if (m.author.id == bot.user.id and m.content.startswith(BACKUP_PREFIX)
+                and any(a.filename.endswith(".zip") for a in m.attachments)):
+            return m
+    return None
+
+async def _try_restore_missing() -> bool:
+    """Load file yang hilang dari backup terbaru. True kalau pengecekan sukses."""
+    global _backup_ready, _last_backup_hash
+    try:
+        ch = await _get_backup_channel()
+        msg = await _find_latest_backup(ch)
+        if msg:
+            att = next(a for a in msg.attachments if a.filename.endswith(".zip"))
+            restored, _ = _restore_from_zip(await att.read(), overwrite=False)
+            print(f"[Backup] Setting di-load dari backup: {len(restored)} file ({', '.join(restored) or '-'})")
+        else:
+            print("[Backup] Belum ada backup di channel — mulai dari kosong.")
+        _last_backup_hash = _snapshot_hash(_snapshot())
+        _backup_ready = True
+        return True
+    except Exception as e:
+        print(f"[Backup] Gagal load backup: {e}")
+        return False
+
+async def _do_backup(force: bool = False) -> str:
+    """Return: ok | unchanged | empty | disabled | not_ready"""
+    global _last_backup_hash
+    if not BACKUP_CHANNEL_ID:
+        return "disabled"
+    if not _backup_ready:
+        return "not_ready"  # jangan sampai backup kosong menimpa backup bagus
+    snap = _snapshot()
+    if not snap:
+        return "empty"
+    h = _snapshot_hash(snap)
+    if not force and h == _last_backup_hash:
+        return "unchanged"
+    ch = await _get_backup_channel()
+    now = datetime.datetime.now(WIB)
+    file = discord.File(io.BytesIO(_build_zip(snap)), filename=f"yahaha_backup_{now:%Y%m%d_%H%M%S}.zip")
+    await ch.send(
+        content=f"{BACKUP_PREFIX} | {len(snap)} file | {now:%d-%m-%Y %H:%M} WIB",
+        file=file
+    )
+    _last_backup_hash = h
+    old = [m async for m in ch.history(limit=100)
+           if m.author.id == bot.user.id and m.content.startswith(BACKUP_PREFIX) and m.attachments]
+    for m in old[BACKUP_KEEP:]:
+        try:
+            await m.delete()
+        except Exception:
+            pass
+    return "ok"
+
+@bot.event
+async def setup_hook():
+    # Jalan SEBELUM bot online -> data sudah ter-load sebelum event/command pertama.
+    if not BACKUP_CHANNEL_ID:
+        print("[Backup] BACKUP_CHANNEL_ID belum di-set — auto save/load setting nonaktif.")
+        return
+    await _try_restore_missing()
+
+@tasks.loop(minutes=BACKUP_INTERVAL_MIN)
+async def auto_backup_settings():
+    try:
+        if not _backup_ready and not await _try_restore_missing():
+            return
+        await _do_backup()
+    except Exception as e:
+        print(f"[Backup] Auto-backup gagal: {e}")
+
+@auto_backup_settings.before_loop
+async def before_auto_backup_settings():
+    await bot.wait_until_ready()
+
+@bot.command(name="savesettings", aliases=["savesetting", "backup", "simpansetting"])
+async def savesettings_cmd(ctx):
+    """Simpan semua setting & data ke channel backup sekarang juga."""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya **Admin / Owner**.", delete_after=8)
+    if not BACKUP_CHANNEL_ID:
+        return await ctx.send("⚠️ `BACKUP_CHANNEL_ID` belum di-set di environment variable.")
+    try:
+        if not _backup_ready and not await _try_restore_missing():
+            return await ctx.send("❌ Bot belum bisa mengakses channel backup. Cek izin bot & ID channel.")
+        status = await _do_backup(force=True)
+    except Exception as e:
+        return await ctx.send(f"❌ Backup gagal: {e}")
+    if status == "ok":
+        await ctx.send("💾 Semua setting & data berhasil disimpan ke channel backup.")
+    elif status == "empty":
+        await ctx.send("⚠️ Belum ada data untuk di-backup.")
+    else:
+        await ctx.send(f"⚠️ Backup tidak dijalankan ({status}).")
+
+@bot.command(name="loadsettings", aliases=["loadsetting", "restore", "loadsetting"])
+async def loadsettings_cmd(ctx, konfirmasi: str = None):
+    """Load setting dari backup terakhir. Menimpa data yang sekarang!"""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya **Admin / Owner**.", delete_after=8)
+    if not BACKUP_CHANNEL_ID:
+        return await ctx.send("⚠️ `BACKUP_CHANNEL_ID` belum di-set di environment variable.")
+    try:
+        ch = await _get_backup_channel()
+        msg = await _find_latest_backup(ch)
+    except Exception as e:
+        return await ctx.send(f"❌ Gagal mengakses channel backup: {e}")
+    if not msg:
+        return await ctx.send("❌ Belum ada backup di channel backup.")
+
+    ts = int(msg.created_at.timestamp())
+    if (konfirmasi or "").lower() not in ("ya", "yes", "confirm"):
+        return await ctx.send(
+            f"⚠️ Backup terakhir dibuat <t:{ts}:F> (<t:{ts}:R>).\n"
+            f"Load akan **menimpa** semua setting & data saat ini.\n"
+            f"Ketik `!loadsettings ya` untuk lanjut."
+        )
+    try:
+        att = next(a for a in msg.attachments if a.filename.endswith(".zip"))
+        restored, skipped = _restore_from_zip(await att.read(), overwrite=True)
+    except Exception as e:
+        return await ctx.send(f"❌ Gagal load backup: {e}")
+    global _last_backup_hash
+    _last_backup_hash = _snapshot_hash(_snapshot())
+    await ctx.send(
+        f"✅ **{len(restored)} file** berhasil di-load dari backup <t:{ts}:R>."
+        + (f"\n⚠️ {len(skipped)} file dilewati (tidak valid)." if skipped else "")
+        + "\n📌 Kalau ada panel ticket/giveaway/poll yang tombolnya belum jalan, restart bot sekali."
+    )
 
 
 bot.run(TOKEN)
