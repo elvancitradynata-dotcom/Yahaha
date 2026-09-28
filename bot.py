@@ -47,6 +47,8 @@ BANNER_FILE      = _p("banners.json")
 CUSTOM_CMD_FILE  = _p("custom_commands.json")
 REACT_ROLE_FILE  = _p("react_roles.json")
 AUTOMOD_FILE     = _p("automod.json")
+LOGCFG_FILE      = _p("logconfig.json")
+BANWORD_FILE     = _p("banwords.json")
 WELCOME_CFG_FILE = _p("welcome_config.json")
 POLLS_FILE       = _p("polls.json")
 JOIN_TRACKING_FILE = _p("join_tracking.json")   # tracking kapan user join server
@@ -952,6 +954,10 @@ async def on_message(message):
 
     # ── Auto Mod Anti Spam ──
     await _check_automod(message)
+
+    # ── Ban Word (per channel) ──
+    if await _check_banword(message):
+        return
 
     # ── AFK check ──
     if not isinstance(message.channel, discord.DMChannel):
@@ -2320,6 +2326,21 @@ async def help_cmd(ctx):
                "`!pollresult <id>` — Lihat hasil poll"), inline=False)
     embed.add_field(name="🏓 Ping & Koneksi",
         value=("`!ping` — Cek latensi bot, ping server Discord, dan status koneksi"), inline=False)
+    embed.add_field(name="🔎 Info & Utilitas",
+        value=("`!cekid [@user]` — Cek Discord ID (`!myid`/`!idku`)\n"
+               "`!roleinfo @role` — Info role (`!inforole`/`!cekrole`)\n"
+               "`!listrole` — Daftar role + jumlah member\n"
+               "`!serverinfo` — Info server (`!server`/`!sinfo`)\n"
+               "`!snipe` — Pesan terakhir yang dihapus (`!sn`)"), inline=False)
+    embed.add_field(name="🎲 Fun & Reminder",
+        value=("`!coinflip <heads/tails>` — Lempar koin (`!flip`/`!koin`)\n"
+               "`!dadu [sisi]` — Lempar dadu, default 6 (`!dice`/`!roll`)\n"
+               "`!reminder <10s/5m/2h/1d> <pesan>` — Set pengingat (`!remind`)"), inline=False)
+    embed.add_field(name="📝 Absen, Case & Setoran",
+        value=("`!absen` — Isi absen (Nama, Reason, Berapa Lama)\n"
+               "`!listcase` / `!listcase info <id>` — Lihat daftar / detail case\n"
+               "`!setoran <nama> <jumlah>` — Catat setoran metalscrap\n"
+               "`!setoranlist` — Rekap setoran minggu ini"), inline=False)
     embed.set_footer(text="Asisten Lurah BFL • Gunakan !helpadmin untuk command admin")
     await ctx.send(embed=embed)
 
@@ -2410,8 +2431,58 @@ async def help_admin_cmd(ctx):
                "📌 Auto-backup berkala & auto-load saat bot deploy ulang"), inline=False)
     embed.add_field(name="🏓 Ping & Koneksi",
         value=("`!ping` — Cek latensi bot, ping server Discord, dan status koneksi"), inline=False)
-    embed.set_footer(text="Asisten Lurah BFL • Hanya terlihat oleh Admin/Owner")
+    embed.set_footer(text="Asisten Lurah BFL • Hanya terlihat oleh Admin/Owner • Hal 1/2")
     await ctx.send(embed=embed)
+
+    # ── Halaman 2 (dipisah agar tidak melebihi batas 6000 karakter embed) ──
+    embed2 = discord.Embed(
+        title="🛡️ Admin Command List (Lanjutan)",
+        color=discord.Color.red()
+    )
+    embed2.add_field(name="🎵 TikTok Live Notif",
+        value=("`!tiktok add <username>` — Tambah akun TikTok\n"
+               "`!tiktok remove <username>` — Hapus akun (`delete`/`del`)\n"
+               "`!tiktok list` — Lihat semua akun (`ls`)\n"
+               "`!tiktok channel [#channel]` — Set/lihat channel notif\n"
+               "`!tiktok test <username>` — Tes notif + thumbnail\n"
+               "`!tiktok check` / `!tiktok sync` — Cek / sinkron status live\n"
+               "`!settiktok <username>` — Set akun tunggal (kompatibilitas)\n"
+               "`!checklive [username]` — Cek status live + diagnostik\n"
+               "`!synclive [username]` — Sinkron status & kirim notif bila baru live"), inline=False)
+    embed2.add_field(name="🧑‍⚖️ Moderator Access",
+        value=("`!addmod @user` — Beri akses command moderasi\n"
+               "`!removemod @user` — Cabut akses moderasi\n"
+               "`!modlist` / `!listmod` — Daftar moderator"), inline=False)
+    embed2.add_field(name="🎭 Role Tambahan",
+        value=("`!cabutrole @user @role1 @role2` — Cabut banyak role (`!delrole`)\n"
+               "`!berirole` — alias `!giverole`\n"
+               "`!roleinfo @role` — Info detail role (`!inforole`/`!cekrole`)\n"
+               "`!listrole` — Semua role + jumlah member (`!daftarrole`)"), inline=False)
+    embed2.add_field(name="🤖 Auto Reply DM & Avatar",
+        value=("`!autoreply` / `!ar` — Kelola auto reply via DM\n"
+               "`!avatar [@user]` / `!av` / `!pp` / `!foto` — Avatar ukuran penuh"), inline=False)
+    embed2.add_field(name="📋 List Case *(admin)*",
+        value=("`!listcase add <judul>` — Tambah case\n"
+               "`!listcase proses <id>` — Tandai diproses\n"
+               "`!listcase done <id>` — Tandai selesai\n"
+               "`!listcase hapus <id>` — Hapus case"), inline=False)
+    embed2.add_field(name="💰 Setoran Metalscrap *(admin)*",
+        value=("`!setoran hapus <nama>` — Hapus entri setoran\n"
+               "`!setoran reset` — Paksa reset semua setoran"), inline=False)
+    embed2.add_field(name="🚫 Ban Word & Log",
+        value=("`!banword add [#channel|all] kata1, kata2` — Tambah kata terlarang\n"
+               "`!banword remove [#channel|all] kata` — Hapus kata\n"
+               "`!banword list [#channel|all]` — Lihat daftar\n"
+               "`!banword clear [#channel|all]` — Kosongkan daftar\n"
+               "`!setlogchannel #channel` / `off` — Log pesan terhapus\n"
+               "📌 Tanpa `#channel` = channel ini • `*kata*` = cocok di dalam kata"), inline=False)
+    embed2.add_field(name="🔎 Utilitas",
+        value=("`!cekid [@user]` — Cek Discord ID (`!myid`/`!idku`)\n"
+               "`!serverinfo` — Info server (`!server`/`!sinfo`)\n"
+               "`!snipe` — Pesan terakhir yang dihapus (`!sn`)\n"
+               "📌 Command member lain: lihat `!help`"), inline=False)
+    embed2.set_footer(text="Asisten Lurah BFL • Hanya terlihat oleh Admin/Owner • Hal 2/2")
+    await ctx.send(embed=embed2)
 
 
 # ═══════════════════════════════════════════════════════
@@ -3930,17 +4001,279 @@ async def avatar_cmd(ctx, member: discord.Member = None):
 # ═══════════════════════════════════════════════════════
 _snipe_cache: dict = {}  # channel_id -> {"content", "author", "created_at"}
 
+_bot_deleted_ids: dict = {}  # message_id -> alasan (pesan yang dihapus oleh bot sendiri)
+
+def load_logcfg():   return load_json(LOGCFG_FILE, default={"delete_log_channel": 0})
+def save_logcfg(d):  save_json(LOGCFG_FILE, d)
+
 @bot.event
 async def on_message_delete(message):
-    """Cache pesan yang dihapus untuk !snipe."""
-    if message.author.bot or not message.content:
+    """Cache pesan terhapus untuk !snipe + kirim log ke channel log (kalau sudah di-set)."""
+    if message.guild is None or message.author.bot:
         return
-    _snipe_cache[message.channel.id] = {
-        "content":    message.content,
-        "author":     message.author,
-        "created_at": message.created_at,
-        "avatar_url": message.author.display_avatar.url,
-    }
+    if message.content:
+        _snipe_cache[message.channel.id] = {
+            "content":    message.content,
+            "author":     message.author,
+            "created_at": message.created_at,
+            "avatar_url": message.author.display_avatar.url,
+        }
+
+    reason = _bot_deleted_ids.pop(message.id, None)
+    log_id = int(load_logcfg().get("delete_log_channel", 0) or 0)
+    if not log_id or message.channel.id == log_id:
+        return
+    try:
+        log_ch = bot.get_channel(log_id) or await bot.fetch_channel(log_id)
+    except Exception:
+        return
+
+    # Best-effort: cari siapa yang menghapus lewat audit log (butuh izin View Audit Log)
+    deleter = None
+    if reason is None:
+        try:
+            async for entry in message.guild.audit_logs(limit=5, action=discord.AuditLogAction.message_delete):
+                age = (datetime.datetime.now(datetime.timezone.utc) - entry.created_at).total_seconds()
+                if entry.target.id == message.author.id and age < 10:
+                    deleter = entry.user
+                    break
+        except Exception:
+            pass
+
+    embed = discord.Embed(
+        title="🗑️ Pesan Dihapus",
+        description=(message.content or "*(tanpa teks)*")[:4000],
+        color=discord.Color.orange() if reason else discord.Color.red(),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+    embed.set_author(name=f"{message.author} ({message.author.id})",
+                     icon_url=message.author.display_avatar.url)
+    embed.add_field(name="Channel", value=message.channel.mention, inline=True)
+    embed.add_field(name="Dikirim", value=f"<t:{int(message.created_at.timestamp())}:R>", inline=True)
+    if reason:
+        embed.add_field(name="Dihapus oleh", value=f"Bot — {reason}", inline=False)
+    elif deleter:
+        embed.add_field(name="Dihapus oleh", value=f"{deleter.mention} ({deleter})", inline=False)
+    if message.attachments:
+        embed.add_field(
+            name="Lampiran",
+            value="\n".join(f"[{a.filename}]({a.url})" for a in message.attachments)[:1000],
+            inline=False)
+    embed.set_footer(text=f"Message ID: {message.id}")
+    try:
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"[Log] Gagal kirim log hapus pesan: {e}")
+
+@bot.command(name="setlogchannel", aliases=["setlog"])
+@commands.guild_only()
+async def setlogchannel_cmd(ctx, channel: discord.TextChannel = None):
+    """Admin: set channel log pesan terhapus. `!setlogchannel #channel` / `!setlogchannel off` / tanpa argumen = lihat."""
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin yang bisa pakai command ini.", delete_after=5)
+    cfg = load_logcfg()
+    raw = ctx.message.content.split(maxsplit=1)
+    if len(raw) > 1 and raw[1].strip().lower() in ("off", "mati", "reset", "hapus"):
+        cfg["delete_log_channel"] = 0
+        save_logcfg(cfg)
+        return await ctx.send("✅ Log pesan terhapus **dimatikan**.")
+    if channel is None:
+        cur = int(cfg.get("delete_log_channel", 0) or 0)
+        return await ctx.send(
+            f"📋 Channel log sekarang: {f'<#{cur}>' if cur else '**belum di-set**'}\n"
+            "Set: `!setlogchannel #channel` • Matikan: `!setlogchannel off`")
+    cfg["delete_log_channel"] = channel.id
+    save_logcfg(cfg)
+    await ctx.send(f"✅ Pesan yang dihapus sekarang dilog ke {channel.mention}.")
+
+# ═══════════════════════════════════════════════════════
+#  BAN WORD — kata terlarang per channel (bisa di-setting)
+#  !banword add [#channel|all] kata1, kata2
+#  !banword remove [#channel|all] kata
+#  !banword list [#channel|all]
+#  !banword clear [#channel|all]
+#  Wildcard: *kata* = cocok di dalam kata lain (tanpa * = harus kata utuh)
+# ═══════════════════════════════════════════════════════
+import re as _re
+_banword_cache = {"data": None, "rx": {}}
+
+def load_banwords() -> dict:
+    d = load_json(BANWORD_FILE, default={})
+    d.setdefault("channels", {})   # channel_id(str) -> [kata]
+    d.setdefault("all", [])        # berlaku di semua channel
+    return d
+
+def save_banwords(d: dict):
+    save_json(BANWORD_FILE, d)
+    _banword_cache["data"] = None
+    _banword_cache["rx"] = {}
+
+def _bw_norm(text: str) -> str:
+    text = _re.sub(r"[\u200b\u200c\u200d\u2060\ufeff]", "", text)
+    return text.casefold()
+
+def _bw_compile(word: str):
+    w = _bw_norm(word.strip())
+    left  = not w.startswith("*")
+    right = not w.endswith("*")
+    w = w.strip("*")
+    if not w:
+        return None
+    body = r"\s+".join(_re.escape(p) for p in w.split())
+    return _re.compile((r"(?<!\w)" if left else "") + body + (r"(?!\w)" if right else ""))
+
+def _bw_patterns(channel_id: int) -> list:
+    d = _banword_cache["data"]
+    if d is None:
+        d = _banword_cache["data"] = load_banwords()
+    key = str(channel_id)
+    if key not in _banword_cache["rx"]:
+        words = list(d.get("all", [])) + list(d["channels"].get(key, []))
+        _banword_cache["rx"][key] = [(w, rx) for w in words if (rx := _bw_compile(w))]
+    return _banword_cache["rx"][key]
+
+async def _check_banword(message) -> bool:
+    """True kalau pesan mengandung kata terlarang & sudah dihapus."""
+    if message.guild is None or not message.content or message.author.bot:
+        return False
+    try:
+        if is_moderator(message.author):
+            return False
+    except Exception:
+        pass
+    text = _bw_norm(message.content)
+    for word, rx in _bw_patterns(message.channel.id):
+        if rx.search(text):
+            _bot_deleted_ids[message.id] = f"Ban word (`{word}`)"
+            try:
+                await message.delete()
+            except Exception:
+                _bot_deleted_ids.pop(message.id, None)
+                return False
+            try:
+                await message.channel.send(
+                    f"🚫 {message.author.mention} pesanmu dihapus karena mengandung kata terlarang.",
+                    delete_after=6)
+            except Exception:
+                pass
+            return True
+    return False
+
+@bot.event
+async def on_message_edit(before, after):
+    """Pesan yang diedit juga dicek ban word."""
+    if after.content != before.content:
+        await _check_banword(after)
+
+def _bw_parse(ctx, args: str):
+    """Return (scope, words). scope: 'all' atau channel_id(int). Default = channel tempat command dipakai."""
+    args = (args or "").strip()
+    scope = ctx.channel.id
+    if args:
+        first, _, rest = args.partition(" ")
+        m = _re.fullmatch(r"<#(\d+)>", first)
+        if m:
+            scope, args = int(m.group(1)), rest.strip()
+        elif first.lower() in ("all", "semua"):
+            scope, args = "all", rest.strip()
+    words = [w.strip() for w in _re.split(r"[,\n]", args) if w.strip()]
+    return scope, words
+
+def _bw_scope_label(scope) -> str:
+    return "**semua channel**" if scope == "all" else f"<#{scope}>"
+
+@bot.group(name="banword", aliases=["bw", "katalarang"], invoke_without_command=True)
+@commands.guild_only()
+async def banword_group(ctx):
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin yang bisa pakai command ini.", delete_after=5)
+    await ctx.send(embed=discord.Embed(
+        title="🚫 Ban Word — Cara Pakai",
+        description=(
+            "`!banword add [#channel|all] kata1, kata2` — Tambah kata terlarang\n"
+            "`!banword remove [#channel|all] kata` — Hapus kata\n"
+            "`!banword list [#channel|all]` — Lihat daftar kata\n"
+            "`!banword clear [#channel|all]` — Kosongkan daftar\n\n"
+            "📌 Tanpa `#channel` = channel tempat command dipakai. `all` = semua channel.\n"
+            "📌 Pisahkan banyak kata dengan koma. Frasa (dengan spasi) juga bisa.\n"
+            "📌 Cocok kata utuh, tidak peka huruf besar/kecil. Pakai `*kata*` agar cocok di dalam kata lain.\n"
+            "📌 Admin & moderator tidak terkena filter."),
+        color=discord.Color.red()))
+
+@banword_group.command(name="add", aliases=["tambah"])
+async def banword_add(ctx, *, args: str = None):
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+    scope, words = _bw_parse(ctx, args)
+    if not words:
+        return await ctx.send("❌ Format: `!banword add [#channel|all] kata1, kata2`", delete_after=8)
+    d = load_banwords()
+    lst = d["all"] if scope == "all" else d["channels"].setdefault(str(scope), [])
+    existing = {_bw_norm(w) for w in lst}
+    added = []
+    for w in words:
+        if _bw_norm(w) not in existing:
+            lst.append(w); existing.add(_bw_norm(w)); added.append(w)
+    save_banwords(d)
+    if not added:
+        return await ctx.send("ℹ️ Semua kata itu sudah ada di daftar.")
+    await ctx.send(f"✅ Ditambah ke {_bw_scope_label(scope)}: " + ", ".join(f"`{w}`" for w in added))
+
+@banword_group.command(name="remove", aliases=["hapus", "del", "delete"])
+async def banword_remove(ctx, *, args: str = None):
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+    scope, words = _bw_parse(ctx, args)
+    if not words:
+        return await ctx.send("❌ Format: `!banword remove [#channel|all] kata`", delete_after=8)
+    d = load_banwords()
+    lst = d["all"] if scope == "all" else d["channels"].get(str(scope), [])
+    targets = {_bw_norm(w) for w in words}
+    kept = [w for w in lst if _bw_norm(w) not in targets]
+    removed = len(lst) - len(kept)
+    if scope == "all":
+        d["all"] = kept
+    elif kept:
+        d["channels"][str(scope)] = kept
+    else:
+        d["channels"].pop(str(scope), None)
+    save_banwords(d)
+    await ctx.send(f"✅ {removed} kata dihapus dari {_bw_scope_label(scope)}." if removed
+                   else "ℹ️ Kata tidak ditemukan di daftar.")
+
+@banword_group.command(name="list", aliases=["daftar", "ls"])
+async def banword_list(ctx, *, args: str = None):
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+    d = load_banwords()
+    if not (args or "").strip():
+        # Tanpa argumen: tampilkan ringkasan semua channel
+        embed = discord.Embed(title="🚫 Daftar Ban Word", color=discord.Color.red())
+        embed.add_field(name="🌐 Semua channel",
+                        value=", ".join(f"`{w}`" for w in d["all"])[:1000] or "*kosong*", inline=False)
+        for cid, words in list(d["channels"].items())[:20]:
+            embed.add_field(name=f"#{cid}" if not ctx.guild.get_channel(int(cid)) else ctx.guild.get_channel(int(cid)).name,
+                            value=", ".join(f"`{w}`" for w in words)[:1000], inline=False)
+        if not d["all"] and not d["channels"]:
+            embed.description = "Belum ada kata terlarang. Tambah dengan `!banword add`."
+        return await ctx.send(embed=embed)
+    scope, _ = _bw_parse(ctx, args)
+    lst = d["all"] if scope == "all" else d["channels"].get(str(scope), [])
+    await ctx.send(f"🚫 Ban word {_bw_scope_label(scope)}:\n" +
+                   (", ".join(f"`{w}`" for w in lst)[:1800] if lst else "*kosong*"))
+
+@banword_group.command(name="clear", aliases=["reset"])
+async def banword_clear(ctx, *, args: str = None):
+    if not is_admin(ctx.author):
+        return await ctx.send("❌ Hanya admin.", delete_after=5)
+    scope, _ = _bw_parse(ctx, args)
+    d = load_banwords()
+    if scope == "all":
+        d["all"] = []
+    else:
+        d["channels"].pop(str(scope), None)
+    save_banwords(d)
+    await ctx.send(f"✅ Daftar ban word {_bw_scope_label(scope)} dikosongkan.")
 
 @bot.command(name="snipe", aliases=["sn"])
 @commands.guild_only()
@@ -4761,7 +5094,7 @@ def _backup_paths() -> list:
         GIVEAWAY_FILE, QUOTE_FILE, SETTINGS_FILE, AFK_FILE, BANNER_FILE, CUSTOM_CMD_FILE,
         REACT_ROLE_FILE, AUTOMOD_FILE, WELCOME_CFG_FILE, POLLS_FILE, JOIN_TRACKING_FILE,
         MODERATOR_FILE, TIKTOK_SETTINGS_FILE, AUTOREPLY_FILE, CASE_FILE, SETORAN_FILE,
-        TRIAL_ROLE_FILE,
+        TRIAL_ROLE_FILE, LOGCFG_FILE, BANWORD_FILE,
     ]
 
 def _snapshot() -> dict:
@@ -4911,7 +5244,7 @@ async def savesettings_cmd(ctx):
     else:
         await ctx.send(f"⚠️ Backup tidak dijalankan ({status}).")
 
-@bot.command(name="loadsettings", aliases=["loadsetting", "restore", "loadsetting"])
+@bot.command(name="loadsettings", aliases=["loadsetting", "restore"])
 async def loadsettings_cmd(ctx, konfirmasi: str = None):
     """Load setting dari backup terakhir. Menimpa data yang sekarang!"""
     if not is_admin(ctx.author):
