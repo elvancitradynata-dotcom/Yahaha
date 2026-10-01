@@ -821,8 +821,8 @@ async def tiktok_group(ctx):
     if ctx.invoked_subcommand is None:
         await ctx.send(
             "**📱 TikTok Notification Manager**\n"
-            "`!tiktok add <username>` — tambah akun\n"
-            "`!tiktok remove <username>` — hapus akun\n"
+            "`!tiktok add [user1 user2 ...]` — tambah akun (bisa banyak, satu per baris)\n"
+            "`!tiktok remove <user1 user2 ...>` — hapus akun (bisa banyak)\n"
             "`!tiktok list` — lihat semua akun\n"
             "`!tiktok channel #channel` — ubah channel notif\n"
             "`!tiktok channel` — lihat channel notif sekarang\n"
@@ -832,55 +832,131 @@ async def tiktok_group(ctx):
         )
 
 
+def _parse_tiktok_usernames(text: str):
+    """Pecah input jadi daftar username (pisah: baris baru, spasi, koma, titik koma).
+    Return (valid, invalid). Duplikat di input otomatis dibuang."""
+    valid, invalid, seen = [], [], set()
+    for raw in re.split(r"[\s,;]+", text or ""):
+        if not raw.strip():
+            continue
+        name = normalize_tiktok_username(raw)
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        if re.fullmatch(r"[A-Za-z0-9._-]{1,100}", name):
+            valid.append(name)
+        else:
+            invalid.append(raw.strip())
+    return valid, invalid
+
+
 @tiktok_group.command(name="add")
-async def tiktok_add(ctx, username: str = None):
+async def tiktok_add(ctx, *, usernames_text: str = None):
+    """!tiktok add            -> bot minta input (boleh banyak baris)
+    !tiktok add a b c         -> tambah beberapa akun sekaligus
+    !tiktok add <baris baru>  -> satu username per baris"""
     if not is_admin(ctx.author):
         return await ctx.send("❌ Hanya Admin / Owner.", delete_after=8)
-    if not username:
-        return await ctx.send("❌ Format: `!tiktok add <username>`", delete_after=8)
 
-    username = normalize_tiktok_username(username)
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}", username):
-        return await ctx.send("❌ Username TikTok tidak valid.", delete_after=8)
+    # ── Mode interaktif: tanpa argumen ──
+    if not usernames_text:
+        await ctx.send(
+            f"{ctx.author.mention} 📝 Silahkan input username TikTok.\n"
+            f"Boleh **banyak sekaligus**, satu username per baris, contoh:\n"
+            f"```\nAaaaa\nKhiara\nBenii\nZoiii\n```"
+        )
 
-    settings = load_tiktok_settings()
+        def check(m):
+            return m.author == ctx.author and m.channel == ctx.channel
+
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=120)
+        except asyncio.TimeoutError:
+            return await ctx.send(
+                f"{ctx.author.mention} ⏰ Waktu habis. Ketik `!tiktok add` lagi untuk mulai ulang.",
+                delete_after=10
+            )
+        usernames_text = reply.content
+
+    valid, invalid = _parse_tiktok_usernames(usernames_text)
+    if not valid:
+        return await ctx.send(
+            "❌ Tidak ada username valid. Contoh: `!tiktok add Aaaaa Khiara Benii`",
+            delete_after=10
+        )
+
+    settings  = load_tiktok_settings()
     usernames = settings["usernames"]
+    existing  = {k.lower() for k in usernames}
 
-    if username in usernames:
-        return await ctx.send(f"⚠️ **@{username}** sudah ada di daftar.")
+    added, skipped = [], []
+    for name in valid:
+        if name.lower() in existing:
+            skipped.append(name)
+        else:
+            usernames[name] = {"is_live": False}
+            existing.add(name.lower())
+            added.append(name)
 
-    usernames[username] = {"is_live": False}
-    save_tiktok_settings(settings)
-    await ctx.send(
-        f"✅ **@{username}** ditambahkan ke daftar TikTok.\n"
-        f"👥 Total dipantau: **{len(usernames)}** akun."
-    )
+    if added:
+        save_tiktok_settings(settings)
+
+    lines = []
+    if added:
+        lines.append(f"✅ **{len(added)}** akun ditambahkan:\n" + "\n".join(f"• @{n}" for n in added))
+    if skipped:
+        lines.append(f"⚠️ **{len(skipped)}** sudah ada (dilewati): " + ", ".join(f"@{n}" for n in skipped))
+    if invalid:
+        lines.append(f"❌ **{len(invalid)}** tidak valid: " + ", ".join(f"`{n}`" for n in invalid))
+    lines.append(f"👥 Total dipantau: **{len(usernames)}** akun.")
+    await ctx.send("\n".join(lines))
 
 
 @tiktok_group.command(name="remove", aliases=["delete", "del"])
-async def tiktok_remove(ctx, username: str = None):
+async def tiktok_remove(ctx, *, usernames_text: str = None):
+    """!tiktok remove a b c  (atau satu username per baris)"""
     if not is_admin(ctx.author):
         return await ctx.send("❌ Hanya Admin / Owner.", delete_after=8)
-    if not username:
-        return await ctx.send("❌ Format: `!tiktok remove <username>`", delete_after=8)
+    if not usernames_text:
+        return await ctx.send(
+            "❌ Format: `!tiktok remove <username>` (boleh banyak, pisah spasi/baris baru)",
+            delete_after=8
+        )
 
-    username = normalize_tiktok_username(username)
-    settings = load_tiktok_settings()
+    valid, invalid = _parse_tiktok_usernames(usernames_text)
+    if not valid:
+        return await ctx.send("❌ Tidak ada username valid.", delete_after=8)
+
+    settings  = load_tiktok_settings()
     usernames = settings["usernames"]
+    lower_map = {k.lower(): k for k in usernames}
 
-    if username not in usernames:
-        return await ctx.send(f"❌ **@{username}** tidak ada di daftar.")
+    removed, not_found = [], []
+    for name in valid:
+        real = lower_map.get(name.lower())
+        if real is None:
+            not_found.append(name)
+        else:
+            del usernames[real]
+            removed.append(real)
 
-    del usernames[username]
-    save_tiktok_settings(settings)
+    if removed:
+        save_tiktok_settings(settings)
+        last_data = load_last_tiktok()
+        videos = last_data.get("videos", {}) if isinstance(last_data, dict) else {}
+        for real in removed:
+            videos.pop(real, None)
+        save_last_tiktok({"videos": videos})
 
-    # Remove its last video state too.
-    last_data = load_last_tiktok()
-    videos = last_data.get("videos", {}) if isinstance(last_data, dict) else {}
-    videos.pop(username, None)
-    save_last_tiktok({"videos": videos})
-
-    await ctx.send(f"🗑️ **@{username}** berhasil dihapus dari daftar TikTok.")
+    lines = []
+    if removed:
+        lines.append(f"🗑️ **{len(removed)}** akun dihapus:\n" + "\n".join(f"• @{n}" for n in removed))
+    if not_found:
+        lines.append(f"❌ **{len(not_found)}** tidak ada di daftar: " + ", ".join(f"@{n}" for n in not_found))
+    if invalid:
+        lines.append(f"❌ **{len(invalid)}** tidak valid: " + ", ".join(f"`{n}`" for n in invalid))
+    lines.append(f"👥 Sisa dipantau: **{len(usernames)}** akun.")
+    await ctx.send("\n".join(lines))
 
 
 @tiktok_group.command(name="list", aliases=["ls"])
@@ -1588,51 +1664,245 @@ async def create_room(ctx, *, nama_room: str = None):
 # ═══════════════════════════════════════════════════════
 #  COMMANDS — HELP
 # ═══════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════
+#  COMMANDS — HELP (menu tombol per fitur)
+# ═══════════════════════════════════════════════════════
+class HelpView(View):
+    """Menu help: tombol = nama fitur. Tekan tombol -> tampil command fitur itu,
+    tombol 'Kembali ke Menu' -> balik ke daftar fitur."""
+    PER_ROW = 3
+
+    def __init__(self, author_id, categories, title, intro, color, footer):
+        super().__init__(timeout=180)
+        self.author_id  = author_id
+        self.categories = categories
+        self.title      = title
+        self.intro      = intro
+        self.color      = color
+        self.footer     = footer
+        self.message    = None
+        self._show_menu_buttons()
+
+    def menu_embed(self) -> discord.Embed:
+        e = discord.Embed(title=self.title, description=self.intro, color=self.color)
+        e.set_footer(text=self.footer)
+        return e
+
+    def _show_menu_buttons(self):
+        self.clear_items()
+        for i, (key, (emoji, label, _text)) in enumerate(self.categories.items()):
+            btn = Button(label=label, emoji=emoji,
+                         style=discord.ButtonStyle.secondary,
+                         row=i // self.PER_ROW)
+            btn.callback = self._make_open_callback(key)
+            self.add_item(btn)
+
+    def _make_open_callback(self, key):
+        async def callback(interaction: discord.Interaction):
+            emoji, label, text = self.categories[key]
+            embed = discord.Embed(title=f"{emoji} {label}", description=text, color=self.color)
+            embed.set_footer(text=self.footer)
+            self.clear_items()
+            back = Button(label="Kembali ke Menu", emoji="⬅️", style=discord.ButtonStyle.primary)
+            back.callback = self._back_callback
+            self.add_item(back)
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
+    async def _back_callback(self, interaction: discord.Interaction):
+        self._show_menu_buttons()
+        await interaction.response.edit_message(embed=self.menu_embed(), view=self)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "❌ Menu ini milik orang lain. Ketik `!help` sendiri ya.", ephemeral=True
+            )
+            return False
+        return True
+
+    async def on_timeout(self):
+        if self.message:
+            try:
+                await self.message.edit(view=None)
+            except Exception:
+                pass
+
+
+# key -> (emoji, label tombol, isi command)
+HELP_MEMBER = {
+    "voice": ("🎙️", "Voice Room", """
+`!createroom [nama]` — Buat voice room pribadi
+📌 Room auto-hapus saat kosong, maks 10 orang
+""".strip()),
+    "afk": ("💤", "AFK", """
+`!afk [alasan]` — Set status AFK
+📌 Status hilang otomatis saat kamu kirim pesan
+""".strip()),
+    "nick": ("✏️", "Nickname", """
+`!nick <nickname baru>` — Ganti nickname kamu
+`!nick reset` — Reset nickname ke nama asli
+""".strip()),
+    "poll": ("📊", "Polling", """
+`!poll <menit> <pertanyaan> | <opsi1> | <opsi2>` — Buat poll
+Contoh: `!poll 10 Warna favorit? | Merah | Biru | Hijau`
+`!pollresult <id>` — Lihat hasil poll
+""".strip()),
+    "remind": ("⏰", "Reminder", """
+`!reminder <10s/5m/2h/1d> <pesan>` — Set pengingat
+Alias: `!remind` / `!ingatkan`
+""".strip()),
+    "absen": ("📝", "Absen & Setoran", """
+`!absen` — Isi absen (Nama, Reason, Berapa Lama)
+`!setoran <nama> <jumlah>` — Catat setoran metalscrap
+`!setoranlist [lalu]` — Rekap setoran minggu ini / lalu
+`!setoranbulan [lalu/bulan]` — Total setoran sebulan
+`!setoranriwayat [nama] [hal]` — Riwayat input setoran
+""".strip()),
+    "util": ("🔎", "Info & Utilitas", """
+`!ping` — Cek latensi bot & koneksi
+`!cekid [@user]` — Cek Discord ID (`!myid`/`!idku`)
+`!roleinfo @role` — Info role (`!inforole`/`!cekrole`)
+`!listrole` — Daftar role + jumlah member
+`!serverinfo` — Info server (`!server`/`!sinfo`)
+`!snipe` — Pesan terakhir yang dihapus (`!sn`)
+""".strip()),
+}
+
+HELP_ADMIN = {
+    "mod": ("⚠️", "Moderasi", """
+`!warn @user [alasan]` — Beri peringatan (auto-kick warn ke-3)
+`!warnlist @user` — Lihat semua warn user
+`!clearwarn @user` — Hapus semua warn user
+`!timeout @user <menit> [alasan]` — Timeout member
+`!ban @user [alasan]` — Ban member
+`!unban <user_id>` — Unban via ID
+`!clear [n]` / `!purge` / `!hapus` — Hapus n pesan (default 10)
+""".strip()),
+    "role": ("🎭", "Role", """
+`!giverole @role @user` — Beri role (`!berirole`)
+`!cabutrole @user @role1 @role2` — Cabut banyak role (`!delrole`)
+`!addrole @user <nama_role>` — Tambah role ke member
+`!removerole @user <nama_role>` — Hapus role dari member
+`!roleinfo @role` — Info detail role
+`!listrole` — Semua role + jumlah member
+""".strip()),
+    "trial": ("⏳", "Trial Role", """
+`!trialrole @user @role <durasi>` — Beri role sementara
+Durasi: `30m`, `12h`, `3d`, `1w`, `1d12h`
+`!trialrole list [@user]` — Daftar trial aktif
+`!trialrole cancel @user [@role]` — Hentikan trial sekarang
+📌 Role otomatis dicabut saat masa trial habis
+""".strip()),
+    "automod": ("🛡️", "Automod", """
+`!automod on/off` — Aktif/nonaktifkan
+`!automod threshold <n>` — Batas pesan spam (default 5)
+`!automod interval <detik>` — Jendela waktu (default 5)
+`!automod mute <detik>` — Durasi timeout (default 60)
+`!automod status` — Lihat pengaturan
+""".strip()),
+    "banword": ("🚫", "Banword & Log", """
+`!banword add #channel kata1, kata2` — Ban di channel tertentu
+`!banword add all kata1, kata2` — Ban di semua channel
+`!banword remove #channel kata` — Hapus kata
+`!banword list #channel` — Lihat ban word
+`!banword clear #channel` — Kosongkan ban word
+`!setlogchannel #channel` / `off` — Log pesan terhapus
+📌 Tanpa `#channel` = channel tempat command dipakai
+📌 `*kata*` = cocok di dalam kata
+""".strip()),
+    "tiktok": ("🎵", "TikTok", """
+`!tiktok add` — Bot minta input, **bisa banyak username** (satu per baris)
+`!tiktok add user1 user2` — Tambah banyak akun sekaligus
+`!tiktok remove user1 user2` — Hapus satu/banyak akun
+`!tiktok list` — Lihat semua akun (`ls`)
+`!tiktok channel [#channel]` — Set/lihat channel notif
+`!tiktok test <username>` — Tes notif + thumbnail
+`!tiktok check` / `!tiktok sync` — Cek / sinkron status live
+`!settiktok <username>` — Set akun tunggal
+`!checklive [username]` — Cek status live + diagnostik
+`!synclive [username]` — Sinkron & kirim notif bila baru live
+""".strip()),
+    "setoran": ("💰", "Setoran", """
+`!setoran hapus <nama>` — Hapus entri setoran minggu ini
+`!setoran reset` — Kosongkan rekap minggu ini
+📌 Total bulan & riwayat tetap tersimpan
+📌 Command setoran lain: lihat `!help`
+""".strip()),
+    "giveaway": ("🎉", "Giveaway", """
+**Giveaway** *(DM)*
+`!setgiveaway <channel_id>` — Buat giveaway baru
+📌 Bot tanya durasi (`1h`, `30m`, `2d`) lalu hadiah
+📌 Auto undi pemenang & DM pemenang
+
+**Pengumuman** *(DM)*
+`!pengumuman <channel_id> <pesan>` — Kirim pengumuman @everyone
+""".strip()),
+    "ticket": ("🎫", "Ticket", """
+`!setupticket` — Pasang panel ticket di TICKET_CHANNEL
+📌 Member klik tombol → buat ticket privat
+""".strip()),
+    "reactrole": ("🏷️", "React Role", """
+`!addreactrole #channel <msg_id> <emoji> @role` — Tambah react role
+`!removereactrole <msg_id> <emoji>` — Hapus react role
+`!listreactrole` — Daftar react role aktif
+""".strip()),
+    "welcome": ("👋", "Welcome & Leave", """
+`!setwelcome #channel` — Set channel welcome card
+`!setleave #channel` — Set channel leave message
+`!welcometest` — Test welcome card
+`!leavetest` — Test leave message
+""".strip()),
+    "pollnick": ("📊", "Poll & Nickname", """
+`!poll <menit> <pertanyaan> | <opsi1> | <opsi2>` — Buat poll
+`!endpoll <id>` — Akhiri poll lebih cepat
+`!pollresult <id>` — Lihat hasil poll
+`!setnick @user <nick>` — Atur nickname orang lain
+`!nick <nick>` / `!nick reset` — Nickname sendiri
+""".strip()),
+    "user": ("👤", "User & Moderator", """
+`!userinfo [@user]` — Info lengkap user (`!cekuser`)
+📌 Kapan join, profil, warn, dan roles
+
+**Akses Moderator**
+`!addmod @user` — Beri akses command moderasi
+`!removemod @user` — Cabut akses moderasi
+`!modlist` / `!listmod` — Daftar moderator
+""".strip()),
+    "util": ("🔎", "Utilitas", """
+`!ping` — Latensi bot & koneksi
+`!cekid [@user]` — Cek Discord ID
+`!serverinfo` — Info server
+`!snipe` — Pesan terakhir yang dihapus
+`!avatar [@user]` — Avatar ukuran penuh (`!av`/`!pp`/`!foto`)
+`!autoreply` / `!ar` — Kelola auto reply via DM
+""".strip()),
+    "backup": ("💾", "Backup", """
+`!savesettings` — Simpan semua setting & data ke channel backup
+`!loadsettings` — Load dari backup terakhir (menimpa data sekarang)
+📌 Auto-backup berkala & auto-load saat bot deploy ulang
+""".strip()),
+}
+
+
 @bot.command(name="help")
 async def help_cmd(ctx):
-    embed = discord.Embed(
-        title="📖 Asisten Lurah BFL — Command List",
-        description="Prefix: `!`",
-        color=discord.Color.blue()
+    view = HelpView(
+        author_id=ctx.author.id,
+        categories=HELP_MEMBER,
+        title="📖 Asisten Lurah BFL — Help",
+        intro="Tekan tombol fitur di bawah untuk melihat command-nya.\nPrefix: `!`",
+        color=discord.Color.blue(),
+        footer="Asisten Lurah BFL • Command admin: !helpadmin",
     )
-    embed.add_field(name="🎙️ Voice Room",
-        value=("`!createroom [nama]` — Buat voice room pribadi\n"
-               "📌 Room auto-hapus saat kosong, maks 10 orang"), inline=False)
-    embed.add_field(name="💤 AFK",
-        value=("`!afk [alasan]` — Set status AFK\n"
-               "📌 Status hilang otomatis saat kamu kirim pesan"), inline=False)
-    embed.add_field(name="✏️ Nickname",
-        value=("`!nick <nickname baru>` — Ganti nickname kamu di server ini\n"
-               "`!nick reset` — Reset nickname ke nama asli"), inline=False)
-    embed.add_field(name="📊 Polling",
-        value=("`!poll <menit> <pertanyaan> | <opsi1> | <opsi2>` — Buat poll\n"
-               "Contoh: `!poll 10 Warna favorit? | Merah | Biru | Hijau`\n"
-               "`!pollresult <id>` — Lihat hasil poll"), inline=False)
-    embed.add_field(name="🏓 Ping & Koneksi",
-        value=("`!ping` — Cek latensi bot, ping server Discord, dan status koneksi"), inline=False)
-    embed.add_field(name="🔎 Info & Utilitas",
-        value=("`!cekid [@user]` — Cek Discord ID (`!myid`/`!idku`)\n"
-               "`!roleinfo @role` — Info role (`!inforole`/`!cekrole`)\n"
-               "`!listrole` — Daftar role + jumlah member\n"
-               "`!serverinfo` — Info server (`!server`/`!sinfo`)\n"
-               "`!snipe` — Pesan terakhir yang dihapus (`!sn`)"), inline=False)
-    embed.add_field(name="⏰ Reminder",
-        value=("`!reminder <10s/5m/2h/1d> <pesan>` — Set pengingat (`!remind` / `!ingatkan`)"), inline=False)
-    embed.add_field(name="📝 Absen, Case & Setoran",
-        value=("`!absen` — Isi absen (Nama, Reason, Berapa Lama)\n"
-               "`!setoran <nama> <jumlah>` — Catat setoran metalscrap\n"
-               "`!setoranlist [lalu]` — Rekap setoran minggu ini / minggu lalu\n"
-               "`!setoranbulan [lalu/bulan]` — Total setoran sebulan penuh\n"
-               "`!setoranriwayat [nama] [hal]` — Riwayat semua input setoran"), inline=False)
-    embed.set_footer(text="Asisten Lurah BFL • Gunakan !helpadmin untuk command admin")
-    await ctx.send(embed=embed)
+    view.message = await ctx.send(embed=view.menu_embed(), view=view)
+
 
 @bot.command(name="helpadmin", aliases=["adminhelp"])
 async def help_admin_cmd(ctx):
     # Resolve author sebagai Member (bukan User) agar guild_permissions tersedia
     author = ctx.author
     if isinstance(ctx.channel, discord.DMChannel):
-        # Cari member object di salah satu guild
         for g in bot.guilds:
             m = g.get_member(author.id)
             if m is None:
@@ -1650,115 +1920,17 @@ async def help_admin_cmd(ctx):
         else:
             await ctx.send("❌ Hanya admin yang bisa melihat command ini.", delete_after=5)
         return
-    embed = discord.Embed(
-        title="🛡️ Admin Command List — Asisten Lurah BFL",
-        description="Semua command di bawah hanya untuk Admin/Owner\n📌 Command bertanda *(DM)* bisa dipakai di DM bot",
-        color=discord.Color.red()
-    )
-    embed.add_field(name="⚠️ Moderasi Member",
-        value=("`!warn @user [alasan]` — Beri peringatan (auto-kick di warn ke-3)\n"
-               "`!warnlist @user` — Lihat semua warn milik user\n"
-               "`!clearwarn @user` — Hapus semua warn user\n"
-               "`!timeout @user <menit> [alasan]` — Timeout member\n"
-               "`!ban @user [alasan]` — Ban member dari server\n"
-               "`!unban <user_id>` — Unban member via ID\n"
-               "`!clear [n]` / `!purge` / `!hapus` — Hapus n pesan (default 10)"), inline=False)
-    embed.add_field(name="🎭 Role Management",
-        value=("`!addrole @user <nama_role>` — Tambahkan role ke member\n"
-               "`!removerole @user <nama_role>` — Hapus role dari member\n"
-               "`!giverole @role @user` — Beri role ke user (format baru, lebih mudah)"), inline=False)
-    embed.add_field(name="🎉 Giveaway *(DM)*",
-        value=("`!setgiveaway <channel_id>` — Buat giveaway baru\n"
-               "📌 Bot tanya: durasi (`1h`, `30m`, `2d`) lalu nama hadiah\n"
-               "📌 Auto undi pemenang & DM pemenang"), inline=False)
-    embed.add_field(name="📢 Pengumuman *(DM)*",
-        value=("`!pengumuman <channel_id> <pesan>` — Kirim pengumuman @everyone"), inline=False)
-    embed.add_field(name="🎫 Ticket System",
-        value=("`!setupticket` — Pasang panel ticket di TICKET_CHANNEL\n"
-               "📌 Member klik tombol → buat ticket privat"), inline=False)
-    embed.add_field(name="🎭 React to Get Role",
-        value=("`!addreactrole #channel <msg_id> <emoji> @role` — Tambah react role\n"
-               "`!removereactrole <msg_id> <emoji>` — Hapus react role\n"
-               "`!listreactrole` — Daftar semua react role aktif"), inline=False)
-    embed.add_field(name="🛡️ Auto Mod Anti Spam",
-        value=("`!automod on/off` — Aktifkan/nonaktifkan auto mod\n"
-               "`!automod threshold <n>` — Set batas pesan spam (default: 5)\n"
-               "`!automod interval <detik>` — Set jendela waktu (default: 5 detik)\n"
-               "`!automod mute <detik>` — Set durasi timeout (default: 60 detik)\n"
-               "`!automod status` — Lihat pengaturan saat ini"), inline=False)
-    embed.add_field(name="👋 Welcome & Leave",
-        value=("`!setwelcome #channel` — Set channel welcome card\n"
-               "`!setleave #channel` — Set channel leave message\n"
-               "`!welcometest` — Test welcome card\n"
-               "`!leavetest` — Test leave message"), inline=False)
-    embed.add_field(name="✏️ Nickname & 📊 Poll",
-        value=("`!setnick @user <nick>` — Atur nickname orang lain\n"
-               "`!nick <nick>` / `!nick reset` — Ganti/reset nickname sendiri\n"
-               "`!poll <menit> <pertanyaan> | <opsi1> | <opsi2>` — Buat poll\n"
-               "`!endpoll <id>` — Akhiri poll lebih cepat\n"
-               "`!pollresult <id>` — Lihat hasil poll"), inline=False)
-    embed.add_field(name="👤 Info User",
-        value=("`!userinfo [@user]` / `!cekuser` — Cek info lengkap user\n"
-               "📌 Menampilkan: kapan join, profil, warn, dan roles"), inline=False)
-    embed.add_field(name="⏳ Trial Role",
-        value=("`!trialrole @user @role <durasi>` — Beri role sementara (`30m`, `12h`, `3d`, `1w`, `1d12h`)\n"
-               "`!trialrole list [@user]` — Daftar trial yang sedang aktif\n"
-               "`!trialrole cancel @user [@role]` — Hentikan trial & cabut role sekarang\n"
-               "📌 Role otomatis dicabut saat masa trial habis"), inline=False)
-    embed.add_field(name="💾 Save / Load Setting",
-        value=("`!savesettings` — Simpan semua setting & data ke channel backup\n"
-               "`!loadsettings` — Load setting dari backup terakhir (timpa data sekarang)\n"
-               "📌 Auto-backup berkala & auto-load saat bot deploy ulang"), inline=False)
-    embed.add_field(name="🏓 Ping & Koneksi",
-        value=("`!ping` — Cek latensi bot, ping server Discord, dan status koneksi"), inline=False)
-    embed.set_footer(text="Asisten Lurah BFL • Hanya terlihat oleh Admin/Owner • Hal 1/2")
-    await ctx.send(embed=embed)
 
-    # ── Halaman 2 (dipisah agar tidak melebihi batas 6000 karakter embed) ──
-    embed2 = discord.Embed(
-        title="🛡️ Admin Command List (Lanjutan)",
-        color=discord.Color.red()
+    view = HelpView(
+        author_id=ctx.author.id,
+        categories=HELP_ADMIN,
+        title="🛡️ Admin Help — Asisten Lurah BFL",
+        intro="Tekan tombol fitur di bawah untuk melihat command-nya.\n"
+              "Hanya untuk Admin/Owner • *(DM)* = bisa dipakai di DM bot",
+        color=discord.Color.red(),
+        footer="Asisten Lurah BFL • Hanya Admin/Owner • Command member: !help",
     )
-    embed2.add_field(name="🎵 TikTok Live Notif",
-        value=("`!tiktok add <username>` — Tambah akun TikTok\n"
-               "`!tiktok remove <username>` — Hapus akun (`delete`/`del`)\n"
-               "`!tiktok list` — Lihat semua akun (`ls`)\n"
-               "`!tiktok channel [#channel]` — Set/lihat channel notif\n"
-               "`!tiktok test <username>` — Tes notif + thumbnail\n"
-               "`!tiktok check` / `!tiktok sync` — Cek / sinkron status live\n"
-               "`!settiktok <username>` — Set akun tunggal (kompatibilitas)\n"
-               "`!checklive [username]` — Cek status live + diagnostik\n"
-               "`!synclive [username]` — Sinkron status & kirim notif bila baru live"), inline=False)
-    embed2.add_field(name="🧑‍⚖️ Moderator Access",
-        value=("`!addmod @user` — Beri akses command moderasi\n"
-               "`!removemod @user` — Cabut akses moderasi\n"
-               "`!modlist` / `!listmod` — Daftar moderator"), inline=False)
-    embed2.add_field(name="🎭 Role Tambahan",
-        value=("`!cabutrole @user @role1 @role2` — Cabut banyak role (`!delrole`)\n"
-               "`!berirole` — alias `!giverole`\n"
-               "`!roleinfo @role` — Info detail role (`!inforole`/`!cekrole`)\n"
-               "`!listrole` — Semua role + jumlah member (`!daftarrole`)"), inline=False)
-    embed2.add_field(name="🤖 Auto Reply DM & Avatar",
-        value=("`!autoreply` / `!ar` — Kelola auto reply via DM\n"
-               "`!avatar [@user]` / `!av` / `!pp` / `!foto` — Avatar ukuran penuh"), inline=False)
-    embed2.add_field(name="💰 Setoran Metalscrap *(admin)*",
-        value=("`!setoran hapus <nama>` — Hapus entri setoran minggu ini (total bulan ikut terkoreksi)\n"
-               "`!setoran reset` — Kosongkan rekap minggu ini (total bulan & riwayat tetap)"), inline=False)
-    embed2.add_field(name="🚫 Ban Word & Log",
-        value=("`!banword add #channel kata1, kata2` — Ban di channel tertentu\n"
-               "`!banword add all kata1, kata2` — Ban di semua channel\n"
-               "`!banword remove #channel kata` — Hapus dari channel tertentu\n"
-               "`!banword list #channel` — Lihat ban word channel\n"
-               "`!banword clear #channel` — Kosongkan ban word channel\n"
-               "`!setlogchannel #channel` / `off` — Log pesan terhapus\n"
-               "📌 Tanpa `#channel` = channel tempat command dipakai • `*kata*` = cocok di dalam kata"), inline=False)
-    embed2.add_field(name="🔎 Utilitas",
-        value=("`!cekid [@user]` — Cek Discord ID (`!myid`/`!idku`)\n"
-               "`!serverinfo` — Info server (`!server`/`!sinfo`)\n"
-               "`!snipe` — Pesan terakhir yang dihapus (`!sn`)\n"
-               "📌 Command member lain: lihat `!help`"), inline=False)
-    embed2.set_footer(text="Asisten Lurah BFL • Hanya terlihat oleh Admin/Owner • Hal 2/2")
-    await ctx.send(embed=embed2)
+    view.message = await ctx.send(embed=view.menu_embed(), view=view)
 
 
 # ═══════════════════════════════════════════════════════
@@ -3105,7 +3277,7 @@ async def ping_cmd(ctx):
     """Cek latency Discord + ping HTTP + download/upload speed internet server."""
     import time, urllib.request, urllib.error, os
 
-    msg = await ctx.send("🏓 Mengukur ping, download & upload internet server...\n⏳ Mohon tunggu beberapa detik...")
+    msg = await ctx.send("🏓 Mengukur koneksi...")
 
     ws_latency_ms = round(bot.latency * 1000, 2)
 
@@ -3202,9 +3374,7 @@ async def ping_cmd(ctx):
 
     def speed_quality(mbps):
         if mbps is None:
-            return "⚠️ Gagal diukur"
-        if mbps >= 100:
-            return "🟢 Sangat Cepat"
+            return "⚠️ Gagal"
         if mbps >= 50:
             return "🟢 Cepat"
         if mbps >= 20:
@@ -3213,55 +3383,42 @@ async def ping_cmd(ctx):
             return "🟠 Sedang"
         return "🔴 Lambat"
 
-    def ping_quality(ms):
-        if ms is None:
-            return "⚠️ Gagal diukur"
-        if ms < 50:
-            return "🟢 Sangat Baik"
-        if ms < 100:
-            return "🟢 Baik"
-        if ms < 200:
-            return "🟡 Cukup"
-        if ms < 300:
-            return "🟠 Tinggi"
-        return "🔴 Sangat Tinggi"
+    # Status keseluruhan
+    if download_mbps is None and http_ping is None:
+        status_text, color = "🔴 **Koneksi gagal diukur**", discord.Color.red()
+    elif (download_mbps or 0) >= 20 and (http_ping or 0) < 200:
+        status_text, color = "🟢 **Koneksi Stabil**", discord.Color.green()
+    else:
+        status_text, color = "🟠 **Koneksi Kurang Optimal**", discord.Color.orange()
 
-    now_wib = datetime.datetime.now(WIB).strftime("%H:%M:%S WIB")
+    def _fmt(value, unit):
+        return f"`{value} {unit}`" if value is not None else "`—`"
 
     embed = discord.Embed(
-        title="🏓 Status Koneksi Internet Server",
-        color=discord.Color.green() if (download_mbps or 0) >= 20 else discord.Color.orange(),
+        title="🏓 Status Koneksi",
+        description=status_text,
+        color=color,
         timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
+    # 3 kolom sejajar (kiri-tengah-kanan), tidak turun ke bawah
     embed.add_field(
-        name="📡 Discord WebSocket",
-        value=f"**{ws_latency_ms} ms**",
+        name="Latency",
+        value=f"{_fmt(round(ws_latency_ms), 'ms')} Discord\n{_fmt(round(http_ping) if http_ping is not None else None, 'ms')} HTTP",
         inline=True
     )
     embed.add_field(
-        name="🌐 HTTP Ping",
-        value=(f"**{http_ping} ms** — {ping_quality(http_ping)}" if http_ping is not None else "**Gagal diukur**"),
+        name="Download",
+        value=f"{_fmt(download_mbps, 'Mbps')}\n{speed_quality(download_mbps)}",
         inline=True
     )
     embed.add_field(
-        name="⬇️ Download",
-        value=(f"**{download_mbps} Mbps**\n{speed_quality(download_mbps)}" if download_mbps is not None else "**Gagal diukur**"),
+        name="Upload",
+        value=f"{_fmt(upload_mbps, 'Mbps')}\n{speed_quality(upload_mbps)}",
         inline=True
-    )
-    embed.add_field(
-        name="⬆️ Upload",
-        value=(f"**{upload_mbps} Mbps**\n{speed_quality(upload_mbps)}" if upload_mbps is not None else "**Gagal diukur**"),
-        inline=True
-    )
-    embed.add_field(
-        name="📊 Keterangan",
-        value="Speed diukur langsung dari server bot ke internet menggunakan transfer data nyata (download 5 MB + upload 2 MB).",
-        inline=False
     )
     if speed.get("error"):
-        embed.add_field(name="⚠️ Catatan", value=f"`{speed['error']}`", inline=False)
-    embed.add_field(name="🕐 Waktu Server", value=f"`{now_wib}`", inline=True)
-    embed.set_footer(text=f"Diminta oleh {ctx.author.display_name} • Asisten Lurah BFL")
+        embed.add_field(name="Catatan", value=f"`{speed['error'][:200]}`", inline=False)
+    embed.set_footer(text="Asisten Lurah BFL")
     await msg.edit(content=None, embed=embed)
 
 
