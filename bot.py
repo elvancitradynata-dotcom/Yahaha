@@ -1621,7 +1621,9 @@ async def help_cmd(ctx):
     embed.add_field(name="📝 Absen, Case & Setoran",
         value=("`!absen` — Isi absen (Nama, Reason, Berapa Lama)\n"
                "`!setoran <nama> <jumlah>` — Catat setoran metalscrap\n"
-               "`!setoranlist` — Rekap setoran minggu ini"), inline=False)
+               "`!setoranlist [lalu]` — Rekap setoran minggu ini / minggu lalu\n"
+               "`!setoranbulan [lalu/bulan]` — Total setoran sebulan penuh\n"
+               "`!setoranriwayat [nama] [hal]` — Riwayat semua input setoran"), inline=False)
     embed.set_footer(text="Asisten Lurah BFL • Gunakan !helpadmin untuk command admin")
     await ctx.send(embed=embed)
 
@@ -1740,8 +1742,8 @@ async def help_admin_cmd(ctx):
         value=("`!autoreply` / `!ar` — Kelola auto reply via DM\n"
                "`!avatar [@user]` / `!av` / `!pp` / `!foto` — Avatar ukuran penuh"), inline=False)
     embed2.add_field(name="💰 Setoran Metalscrap *(admin)*",
-        value=("`!setoran hapus <nama>` — Hapus entri setoran\n"
-               "`!setoran reset` — Paksa reset semua setoran"), inline=False)
+        value=("`!setoran hapus <nama>` — Hapus entri setoran minggu ini (total bulan ikut terkoreksi)\n"
+               "`!setoran reset` — Kosongkan rekap minggu ini (total bulan & riwayat tetap)"), inline=False)
     embed2.add_field(name="🚫 Ban Word & Log",
         value=("`!banword add #channel kata1, kata2` — Ban di channel tertentu\n"
                "`!banword add all kata1, kata2` — Ban di semua channel\n"
@@ -3117,55 +3119,75 @@ async def ping_cmd(ctx):
             "upload_bytes": 0,
             "error": None,
         }
+        errors = []
+
+        # PENTING: Cloudflare memblokir User-Agent bawaan urllib ("Python-urllib/3.x")
+        # dengan HTTP 403 -> semua tes gagal. Wajib kirim header browser.
+        HEADERS = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+            "Accept": "*/*",
+            "Origin": "https://speed.cloudflare.com",
+            "Referer": "https://speed.cloudflare.com/",
+        }
+
+        def _err(label, e):
+            code = getattr(e, "code", None)
+            errors.append(f"{label}: {type(e).__name__}" + (f" {code}" if code else ""))
 
         # 1) HTTP latency — koneksi internet, bukan Discord WebSocket.
         try:
             ping_times = []
             for _ in range(3):
+                req = urllib.request.Request(
+                    "https://speed.cloudflare.com/__down?bytes=1", headers=HEADERS
+                )
                 t0 = time.perf_counter()
-                with urllib.request.urlopen(
-                    "https://speed.cloudflare.com/__down?bytes=1",
-                    timeout=10
-                ) as response:
+                with urllib.request.urlopen(req, timeout=10) as response:
                     response.read(1)
                 ping_times.append((time.perf_counter() - t0) * 1000)
             result["http_ping"] = round(sum(ping_times) / len(ping_times), 2)
         except Exception as e:
-            result["error"] = f"HTTP ping: {type(e).__name__}"
+            _err("HTTP ping", e)
 
         # 2) Download test — 5 MB supaya hasil tidak bias karena file terlalu kecil.
         try:
-            download_url = "https://speed.cloudflare.com/__down?bytes=5242880"
+            req = urllib.request.Request(
+                "https://speed.cloudflare.com/__down?bytes=5242880", headers=HEADERS
+            )
             t0 = time.perf_counter()
-            with urllib.request.urlopen(download_url, timeout=30) as response:
+            with urllib.request.urlopen(req, timeout=30) as response:
                 data = response.read()
             elapsed = max(time.perf_counter() - t0, 0.001)
             result["download_bytes"] = len(data)
             result["download_mbps"] = round((len(data) * 8) / elapsed / 1_000_000, 2)
         except Exception as e:
-            result["error"] = f"Download: {type(e).__name__}"
+            _err("Download", e)
 
         # 3) Upload test — kirim 2 MB ke endpoint upload Cloudflare.
         try:
             upload_data = os.urandom(2 * 1024 * 1024)
-            request = urllib.request.Request(
+            req = urllib.request.Request(
                 "https://speed.cloudflare.com/__up",
                 data=upload_data,
                 method="POST",
                 headers={
-                    "Content-Type": "application/octet-stream",
+                    **HEADERS,
+                    "Content-Type": "text/plain;charset=UTF-8",
                     "Content-Length": str(len(upload_data)),
                 },
             )
             t0 = time.perf_counter()
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(req, timeout=30) as response:
                 response.read()
             elapsed = max(time.perf_counter() - t0, 0.001)
             result["upload_bytes"] = len(upload_data)
             result["upload_mbps"] = round((len(upload_data) * 8) / elapsed / 1_000_000, 2)
         except Exception as e:
-            result["error"] = f"Upload: {type(e).__name__}"
+            _err("Upload", e)
 
+        if errors:
+            result["error"] = " | ".join(errors)
         return result
 
     try:
@@ -3739,26 +3761,75 @@ async def reminder_cmd(ctx, waktu: str = None, *, pesan: str = "Waktunya!"):
 
 
 # ═══════════════════════════════════════════════════════
-#  SETORAN METALSCRAP (reset otomatis tiap Senin 00.00 WIB)
+#  SETORAN METALSCRAP
+#  - Rekap MINGGUAN reset otomatis tiap Senin 00.00 WIB
+#  - Semua input dicatat PERMANEN di "log" → total BULANAN & riwayat tidak ikut hilang
 # ═══════════════════════════════════════════════════════
 SETORAN_FILE = _p("setoran_metalscrap.json")
+
+BULAN_ID = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
+            "Agustus", "September", "Oktober", "November", "Desember"]
 
 def _week_start_str(dt: datetime.datetime) -> str:
     """Tanggal Senin (ISO date) dari minggu yang memuat dt, dalam WIB."""
     monday = dt.date() - datetime.timedelta(days=dt.weekday())
     return monday.isoformat()
 
+def _week_label(week_start: str) -> str:
+    try:
+        a = datetime.date.fromisoformat(week_start)
+        b = a + datetime.timedelta(days=6)
+        return f"{a:%d/%m} – {b:%d/%m/%Y}"
+    except Exception:
+        return str(week_start)
+
+def _ts_to_wib(ts: int) -> datetime.datetime:
+    return datetime.datetime.fromtimestamp(ts, WIB)
+
+def _migrate_setoran_log(data: dict) -> bool:
+    """Data lama (tanpa log) → buat log dari entries minggu ini & minggu lalu. True kalau ada perubahan."""
+    if isinstance(data.get("log"), list):
+        data.setdefault("next_id", len(data["log"]) + 1)
+        return False
+    log, nid = [], 1
+
+    def _add(entries, week):
+        nonlocal nid
+        for key, e in (entries or {}).items():
+            ts = e.get("terakhir_ts")
+            if not ts:
+                try:
+                    d = datetime.date.fromisoformat(week)
+                    ts = int(WIB.localize(datetime.datetime(d.year, d.month, d.day, 12)).timestamp())
+                except Exception:
+                    ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+            log.append({
+                "id": nid, "key": key, "nama": e.get("nama", key),
+                "jumlah": float(e.get("jumlah", 0)), "oleh": e.get("terakhir_oleh", "-"),
+                "ts": int(ts), "week": week, "deleted": False, "cleared": False, "migrasi": True,
+            })
+            nid += 1
+
+    _add(data.get("previous_entries"), data.get("previous_week_start"))
+    _add(data.get("entries"), data.get("week_start"))
+    data["log"], data["next_id"] = log, nid
+    return True
+
 def load_setoran() -> dict:
-    data = load_json(SETORAN_FILE, default={"week_start": None, "entries": {}})
+    data = load_json(SETORAN_FILE, default={})
+    data.setdefault("week_start", None)
+    data.setdefault("entries", {})
+    changed = _migrate_setoran_log(data)
     current_week = _week_start_str(datetime.datetime.now(WIB))
     if data.get("week_start") != current_week:
-        # Minggu baru sudah dimulai → reset otomatis, simpan arsip minggu lalu
-        data = {
-            "week_start": current_week,
-            "entries": {},
-            "previous_week_start": data.get("week_start"),
-            "previous_entries": data.get("entries", {}),
-        }
+        # Minggu baru → rekap mingguan di-reset. Log (riwayat & total bulanan) TIDAK disentuh.
+        if data.get("week_start") and data.get("entries"):
+            data["previous_week_start"] = data["week_start"]
+            data["previous_entries"] = data["entries"]
+        data["week_start"] = current_week
+        data["entries"] = {}
+        changed = True
+    if changed:
         save_json(SETORAN_FILE, data)
     return data
 
@@ -3798,7 +3869,7 @@ def _parse_setoran_lines(text: str):
     return entries, errors
 
 def _apply_setoran_entries(entries, oleh: str) -> dict:
-    """Terapkan list (nama, jumlah) ke data setoran minggu ini, akumulatif. Return data terbaru."""
+    """Terapkan list (nama, jumlah) ke data setoran minggu ini (akumulatif) + catat ke log permanen."""
     data   = load_setoran()
     now_ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
     for nama_raw, jumlah in entries:
@@ -3809,63 +3880,117 @@ def _apply_setoran_entries(entries, oleh: str) -> dict:
         existing["terakhir_oleh"] = oleh
         existing["terakhir_ts"]   = now_ts
         data["entries"][key] = existing
+
+        data["log"].append({
+            "id": data["next_id"], "key": key, "nama": nama_raw, "jumlah": jumlah,
+            "oleh": oleh, "ts": now_ts, "week": data["week_start"],
+            "deleted": False, "cleared": False,
+        })
+        data["next_id"] += 1
     save_setoran(data)
     return data
 
-def _setoran_list_embed(data: dict, footer: str) -> discord.Embed:
-    sorted_entries = sorted(data["entries"].values(), key=lambda e: e["jumlah"], reverse=True)
+# ── Helper agregasi dari log ─────────────────────────
+def _log_active(data: dict):
+    return [e for e in data.get("log", []) if not e.get("deleted")]
+
+def _aggregate_log(items) -> dict:
+    """list entri log → {key: {"nama", "jumlah"}}"""
+    out = {}
+    for e in sorted(items, key=lambda x: x["ts"]):
+        row = out.setdefault(e["key"], {"nama": e["nama"], "jumlah": 0.0})
+        row["nama"] = e["nama"]
+        row["jumlah"] += e["jumlah"]
+    return out
+
+def _month_items(data: dict, year: int, month: int):
+    res = []
+    for e in _log_active(data):
+        d = _ts_to_wib(e["ts"])
+        if d.year == year and d.month == month:
+            res.append(e)
+    return res
+
+def _month_total(data: dict, year: int, month: int) -> float:
+    return sum(e["jumlah"] for e in _month_items(data, year, month))
+
+def _table_block(rows) -> tuple:
+    """rows = list[{"nama","jumlah"}] → (code block, total). Dipotong aman bila terlalu panjang."""
+    NAME_WIDTH = 18
+    rows = sorted(rows, key=lambda e: e["jumlah"], reverse=True)
+    total = sum(r["jumlah"] for r in rows)
+    lines = []
+    for i, e in enumerate(rows, start=1):
+        nama = e["nama"]
+        if len(nama) > NAME_WIDTH:
+            nama = nama[:NAME_WIDTH - 1] + "…"
+        lines.append(f"{i:>2}. {nama:<{NAME_WIDTH}} {e['jumlah']:>8.0f}")
+    header  = f"    {'Nama':<{NAME_WIDTH}} {'Jumlah':>8}   "
+    divider = "-" * len(header)
+    footer  = f"\n{divider}\n    {'Total':<{NAME_WIDTH}} {total:>8.0f} kg\n```"
+    head    = "```\n" + header + "\n" + divider + "\n"
+    body, used = [], len(head) + len(footer) + 40
+    for ln in lines:
+        if used + len(ln) + 1 > 3900:
+            body.append(f"... +{len(lines) - len(body)} baris lagi")
+            break
+        body.append(ln)
+        used += len(ln) + 1
+    return head + "\n".join(body) + footer, total
+
+def _setoran_list_embed(data: dict, footer: str, title: str = "♻️ Daftar Setoran Metalscrap",
+                        entries: dict = None, empty_text: str = "_Belum ada setoran minggu ini._",
+                        bulan_total: tuple = None) -> discord.Embed:
+    """entries=None → pakai rekap minggu ini. bulan_total=(label, total) → tampilkan total bulan."""
+    src = data["entries"] if entries is None else entries
+    sorted_entries = sorted(src.values(), key=lambda e: e["jumlah"], reverse=True)
 
     embed = discord.Embed(
-        title="♻️ Daftar Setoran Metalscrap",
+        title=title,
         color=discord.Color.from_rgb(120, 170, 80),
         timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
 
     if not sorted_entries:
-        embed.description = "_Belum ada setoran minggu ini._"
-        embed.set_footer(text=footer)
-        return embed
-
-    NAME_WIDTH = 18
-    rows = []
-    total = 0.0
-    for i, e in enumerate(sorted_entries, start=1):
-        nama = e["nama"]
-        if len(nama) > NAME_WIDTH:
-            nama = nama[:NAME_WIDTH - 1] + "…"
-        jumlah = e["jumlah"]
-        total += jumlah
-        rows.append(f"{i:>2}. {nama:<{NAME_WIDTH}} {jumlah:>8.0f}")
-
-    header = f"    {'Nama':<{NAME_WIDTH}} {'Jumlah':>8}   "
-    divider = "-" * len(header)
-    table = "```\n" + header + "\n" + divider + "\n" + "\n".join(rows) + "\n" + divider + f"\n    {'Total':<{NAME_WIDTH}} {total:>8.0f} kg\n```"
-
-    embed.description = table
-    embed.add_field(name="Total Penyetor", value=str(len(sorted_entries)), inline=True)
-    embed.add_field(name="Total Metalscrap", value=f"{total:g}", inline=True)
+        embed.description = empty_text
+    else:
+        table, total = _table_block(sorted_entries)
+        embed.description = table
+        embed.add_field(name="Total Penyetor", value=str(len(sorted_entries)), inline=True)
+        embed.add_field(name="Total Metalscrap", value=f"{total:g} kg", inline=True)
+    if bulan_total:
+        embed.add_field(name=f"📅 Total {bulan_total[0]}", value=f"{bulan_total[1]:g} kg", inline=True)
     embed.set_footer(text=footer)
     return embed
 
 @tasks.loop(minutes=5)
 async def check_setoran_reset():
-    # Memuat data otomatis melakukan reset jika minggu sudah berganti
+    # Memuat data otomatis melakukan reset mingguan jika minggu sudah berganti (log tetap aman)
     load_setoran()
 
 @check_setoran_reset.before_loop
 async def before_check_setoran_reset():
     await bot.wait_until_ready()
 
+_SETORAN_FOOTER = "Reset mingguan tiap Senin 00.00 WIB • Asisten Lurah BFL"
+
 @bot.command(name="setoran")
 async def setoran_cmd(ctx, *, args: str = None):
     """
     !setoran                     → Bot minta input, bisa banyak baris sekaligus
     !setoran <nama> <jumlah>     → Catat langsung (bisa multi-baris juga)
-    !setoran hapus <nama>        → Hapus entri setoran (admin)
-    !setoran reset               → Paksa reset semua setoran (admin)
+    !setoran hapus <nama>        → Hapus entri setoran minggu ini (admin)
+    !setoran reset               → Kosongkan rekap minggu ini (admin) — total bulan & riwayat tetap ada
 
-    Setoran otomatis di-reset tiap hari Senin jam 00.00 WIB.
+    Rekap mingguan otomatis di-reset tiap Senin 00.00 WIB. Total bulanan: !setoranbulan, riwayat: !setoranriwayat
     """
+    def _embed_after_input(data, footer):
+        now = datetime.datetime.now(WIB)
+        return _setoran_list_embed(
+            data, footer,
+            bulan_total=(f"{BULAN_ID[now.month - 1]} {now.year}", _month_total(data, now.year, now.month))
+        )
+
     # ── TANPA ARGUMEN: mode interaktif ───────────────
     if not args:
         await ctx.send(f"{ctx.author.mention} 📝 Silahkan input setoran")
@@ -3892,7 +4017,7 @@ async def setoran_cmd(ctx, *, args: str = None):
         footer = f"Dicatat oleh {ctx.author.display_name} • Asisten Lurah BFL"
         if errors:
             footer += f" • {len(errors)} baris dilewati (format salah)"
-        return await ctx.send(embed=_setoran_list_embed(data, footer))
+        return await ctx.send(embed=_embed_after_input(data, footer))
 
     parts = args.strip().split()
 
@@ -3900,15 +4025,19 @@ async def setoran_cmd(ctx, *, args: str = None):
     if parts[0].lower() == "reset":
         if not is_admin(ctx.author):
             return await ctx.send("❌ Hanya **Admin / Owner** yang bisa reset setoran.", delete_after=8)
-        current_week = _week_start_str(datetime.datetime.now(WIB))
         old = load_setoran()
-        save_setoran({
-            "week_start": current_week,
-            "entries": {},
-            "previous_week_start": old.get("week_start"),
-            "previous_entries": old.get("entries", {}),
-        })
-        return await ctx.send("🔄 Setoran metalscrap minggu ini berhasil di-reset.")
+        if old["entries"]:
+            old["previous_week_start"] = old.get("week_start")
+            old["previous_entries"] = old["entries"]
+        old["entries"] = {}
+        for e in old["log"]:
+            if e.get("week") == old["week_start"]:
+                e["cleared"] = True
+        save_setoran(old)
+        return await ctx.send(
+            "🔄 Rekap setoran **minggu ini** di-reset.\n"
+            "📅 Total bulanan & riwayat input tetap tersimpan (`!setoranbulan`, `!setoranriwayat`)."
+        )
 
     # ── SUBCOMMAND: hapus <nama> (admin) ─────────────
     if parts[0].lower() == "hapus" and len(parts) > 1:
@@ -3920,8 +4049,15 @@ async def setoran_cmd(ctx, *, args: str = None):
         if key not in data["entries"]:
             return await ctx.send(f"❌ Entri **{nama_target}** tidak ditemukan di setoran minggu ini.", delete_after=8)
         removed = data["entries"].pop(key)
+        # Hapus juga dari log supaya total bulanan ikut terkoreksi
+        for e in data["log"]:
+            if e["key"] == key and e.get("week") == data["week_start"] and not e.get("cleared"):
+                e["deleted"] = True
         save_setoran(data)
-        return await ctx.send(f"🗑️ Entri **{removed['nama']}** ({removed['jumlah']:g}) berhasil dihapus dari setoran.")
+        return await ctx.send(
+            f"🗑️ Entri **{removed['nama']}** ({removed['jumlah']:g}) berhasil dihapus dari setoran "
+            f"(total bulanan ikut terkoreksi)."
+        )
 
     # ── INPUT LANGSUNG: bisa satu atau banyak baris ──
     entries, errors = _parse_setoran_lines(args)
@@ -3936,17 +4072,184 @@ async def setoran_cmd(ctx, *, args: str = None):
     footer = f"Dicatat oleh {ctx.author.display_name} • Asisten Lurah BFL"
     if errors:
         footer += f" • {len(errors)} baris dilewati (format salah)"
-    await ctx.send(embed=_setoran_list_embed(data, footer))
+    await ctx.send(embed=_embed_after_input(data, footer))
+
+def _parse_week_arg(arg: str):
+    """'lalu' → Senin minggu lalu; 'YYYY-MM-DD' / 'DD-MM-YYYY' → Senin minggu yang memuat tanggal itu."""
+    arg = arg.strip().lower()
+    today = datetime.datetime.now(WIB)
+    if arg in ("lalu", "kemarin", "last", "prev"):
+        return _week_start_str(today - datetime.timedelta(days=7))
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+        try:
+            d = datetime.datetime.strptime(arg, fmt)
+            return _week_start_str(d)
+        except ValueError:
+            pass
+    return None
 
 @bot.command(name="setoranlist", aliases=["setoranlst", "listsetoran"])
-async def setoranlist_cmd(ctx):
-    """Menampilkan rekap setoran metalscrap minggu ini."""
+async def setoranlist_cmd(ctx, *, minggu: str = None):
+    """Rekap setoran mingguan. `!setoranlist` = minggu ini, `!setoranlist lalu`, atau `!setoranlist 2026-09-21`."""
     data = load_setoran()
+    now = datetime.datetime.now(WIB)
+
+    if minggu:
+        ws = _parse_week_arg(minggu)
+        if not ws:
+            return await ctx.send(
+                "❌ Format salah. Contoh: `!setoranlist lalu` atau `!setoranlist 2026-09-21` (tanggal apa pun di minggu itu).",
+                delete_after=12
+            )
+        if ws != data["week_start"]:
+            items = [e for e in _log_active(data) if e.get("week") == ws]
+            return await ctx.send(embed=_setoran_list_embed(
+                data, _SETORAN_FOOTER,
+                title=f"♻️ Setoran Minggu {_week_label(ws)}",
+                entries=_aggregate_log(items),
+                empty_text="_Tidak ada data setoran di minggu itu._"
+            ))
+
+    bt = (f"{BULAN_ID[now.month - 1]} {now.year}", _month_total(data, now.year, now.month))
     if not data.get("entries"):
         return await ctx.send(
-            "📋 Belum ada setoran metalscrap minggu ini. Catat dengan `!setoran`"
+            "📋 Belum ada setoran metalscrap minggu ini. Catat dengan `!setoran`\n"
+            f"📅 Total {bt[0]} sejauh ini: **{bt[1]:g} kg** (`!setoranbulan` untuk detail)"
         )
-    await ctx.send(embed=_setoran_list_embed(data, "Reset otomatis tiap Senin 00.00 WIB • Asisten Lurah BFL"))
+    await ctx.send(embed=_setoran_list_embed(
+        data, _SETORAN_FOOTER,
+        title=f"♻️ Setoran Minggu Ini ({_week_label(data['week_start'])})",
+        bulan_total=bt
+    ))
+
+def _parse_month_arg(arg: str):
+    """Return (year, month) atau None. Mendukung: kosong, 'lalu', '10', '10-2026', '2026-10', 'oktober', 'oktober 2026'."""
+    now = datetime.datetime.now(WIB)
+    if not arg:
+        return now.year, now.month
+    a = arg.strip().lower()
+    if a in ("lalu", "kemarin", "last", "prev"):
+        y, m = (now.year, now.month - 1) if now.month > 1 else (now.year - 1, 12)
+        return y, m
+    toks = re.split(r"[\s/\-]+", a)
+    year, month = now.year, None
+    for t in toks:
+        if not t:
+            continue
+        if t.isdigit():
+            n = int(t)
+            if n >= 1000:
+                year = n
+            elif 1 <= n <= 12 and month is None:
+                month = n
+            else:
+                return None
+        else:
+            for i, nm in enumerate(BULAN_ID, start=1):
+                if len(t) >= 3 and nm.lower().startswith(t):
+                    month = i
+                    break
+            else:
+                return None
+    if month is None:
+        return None
+    return year, month
+
+@bot.command(name="setoranbulan", aliases=["setoranbulanan", "bulansetoran", "totalsetoran"])
+async def setoranbulan_cmd(ctx, *, bulan: str = None):
+    """Total setoran sebulan penuh. Contoh: !setoranbulan | !setoranbulan lalu | !setoranbulan 9 | !setoranbulan oktober 2026"""
+    ym = _parse_month_arg(bulan)
+    if not ym:
+        return await ctx.send(
+            "❌ Format salah. Contoh: `!setoranbulan`, `!setoranbulan lalu`, `!setoranbulan 9`, `!setoranbulan oktober 2026`",
+            delete_after=12
+        )
+    year, month = ym
+    data  = load_setoran()
+    items = _month_items(data, year, month)
+    label = f"{BULAN_ID[month - 1]} {year}"
+
+    embed = discord.Embed(
+        title=f"📅 Rekap Setoran Bulan {label}",
+        color=discord.Color.from_rgb(80, 150, 200),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+    if not items:
+        embed.description = f"_Belum ada data setoran di bulan {label}._"
+        embed.set_footer(text="Asisten Lurah BFL")
+        return await ctx.send(embed=embed)
+
+    table, total = _table_block(list(_aggregate_log(items).values()))
+    embed.description = table
+
+    # Rincian per minggu
+    per_week = {}
+    for e in items:
+        per_week[e.get("week") or "?"] = per_week.get(e.get("week") or "?", 0.0) + e["jumlah"]
+    wk_lines = [f"• {_week_label(w)}: **{v:g} kg**" for w, v in sorted(per_week.items())]
+    embed.add_field(name="🗓️ Rincian per Minggu", value="\n".join(wk_lines)[:1024], inline=False)
+    embed.add_field(name="Total Penyetor", value=str(len({e['key'] for e in items})), inline=True)
+    embed.add_field(name="Total Bulan Ini", value=f"{total:g} kg", inline=True)
+    embed.add_field(name="Jumlah Input", value=str(len(items)), inline=True)
+    embed.set_footer(text="Data bulanan tidak ikut ter-reset • Asisten Lurah BFL")
+    await ctx.send(embed=embed)
+
+@bot.command(name="setoranriwayat", aliases=["riwayatsetoran", "setoranlog", "setoranhistory"])
+async def setoranriwayat_cmd(ctx, *, args: str = None):
+    """Riwayat semua input setoran. Contoh: !setoranriwayat | !setoranriwayat masjack | !setoranriwayat 2 | !setoranriwayat masjack 2"""
+    PER_PAGE = 15
+    page, nama_filter = 1, None
+    if args:
+        toks = args.strip().split()
+        if toks[-1].isdigit() and len(toks) > 1:
+            page = max(1, int(toks.pop()))
+            nama_filter = " ".join(toks)
+        elif toks[-1].isdigit() and len(toks) == 1:
+            page = max(1, int(toks[0]))
+        else:
+            nama_filter = " ".join(toks)
+
+    data  = load_setoran()
+    items = _log_active(data)
+    if nama_filter:
+        nf = nama_filter.lower()
+        items = [e for e in items if nf in e["key"]]
+    items.sort(key=lambda e: (e["ts"], e["id"]), reverse=True)
+
+    if not items:
+        return await ctx.send(
+            f"📋 Tidak ada riwayat setoran{f' untuk **{nama_filter}**' if nama_filter else ''}.", delete_after=10
+        )
+
+    pages = max(1, math.ceil(len(items) / PER_PAGE))
+    page  = min(page, pages)
+    chunk = items[(page - 1) * PER_PAGE: page * PER_PAGE]
+
+    lines = []
+    for e in chunk:
+        d = _ts_to_wib(e["ts"])
+        nama = e["nama"] if len(e["nama"]) <= 14 else e["nama"][:13] + "…"
+        oleh = e.get("oleh", "-")
+        oleh = oleh if len(oleh) <= 12 else oleh[:11] + "…"
+        mig  = "*" if e.get("migrasi") else " "
+        lines.append(f"#{e['id']:<4}{d:%d/%m %H:%M} {nama:<14} {e['jumlah']:>7.0f}{mig} {oleh}")
+    total_filter = sum(e["jumlah"] for e in items)
+
+    embed = discord.Embed(
+        title="🧾 Riwayat Setoran" + (f" — {nama_filter}" if nama_filter else ""),
+        description="```\n" + "\n".join(lines) + "\n```",
+        color=discord.Color.from_rgb(150, 120, 200),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+    embed.add_field(name="Total Input", value=str(len(items)), inline=True)
+    embed.add_field(name="Total Jumlah", value=f"{total_filter:g} kg", inline=True)
+    foot = f"Halaman {page}/{pages}"
+    if pages > 1:
+        foot += f" • !setoranriwayat {nama_filter + ' ' if nama_filter else ''}{min(page + 1, pages)} untuk berikutnya"
+    if any(e.get("migrasi") for e in chunk):
+        foot += " • * = data lama (sudah digabung per nama)"
+    embed.set_footer(text=foot)
+    await ctx.send(embed=embed)
 
 
 # ═══════════════════════════════════════════════════════
@@ -4185,7 +4488,7 @@ def _backup_paths() -> list:
         LAST_TIKTOK_FILE, TICKET_FILE, VERIF_FILE, WARN_FILE,
         GIVEAWAY_FILE, SETTINGS_FILE, AFK_FILE, CUSTOM_CMD_FILE,
         REACT_ROLE_FILE, AUTOMOD_FILE, WELCOME_CFG_FILE, POLLS_FILE, JOIN_TRACKING_FILE,
-        MODERATOR_FILE, TIKTOK_SETTINGS_FILE, AUTOREPLY_FILE, CASE_FILE, SETORAN_FILE,
+        MODERATOR_FILE, TIKTOK_SETTINGS_FILE, AUTOREPLY_FILE, SETORAN_FILE,
         TRIAL_ROLE_FILE, LOGCFG_FILE, BANWORD_FILE,
     ]
 
@@ -4365,6 +4668,9 @@ async def loadsettings_cmd(ctx, konfirmasi: str = None):
         return await ctx.send(f"❌ Gagal load backup: {e}")
     global _last_backup_hash
     _last_backup_hash = _snapshot_hash(_snapshot())
+    # Cache banword ada di memori -> wajib di-reset supaya data hasil load langsung dipakai
+    _banword_cache["data"] = None
+    _banword_cache["rx"] = {}
     await ctx.send(
         f"✅ **{len(restored)} file** berhasil di-load dari backup <t:{ts}:R>."
         + (f"\n⚠️ {len(skipped)} file dilewati (tidak valid)." if skipped else "")
