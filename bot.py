@@ -1690,6 +1690,7 @@ class HelpView(View):
         self.color      = color
         self.footer     = footer
         self.message    = None
+        self.PER_ROW    = max(3, math.ceil(len(categories) / 5))  # Discord maks 5 baris
         self._show_menu_buttons()
 
     def menu_embed(self) -> discord.Embed:
@@ -1767,6 +1768,15 @@ Alias: `!remind` / `!ingatkan`
 `!setoranlist [lalu]` — Rekap setoran minggu ini / lalu
 `!setoranbulan [lalu/bulan]` — Total setoran sebulan
 `!setoranriwayat [nama] [hal]` — Riwayat input setoran
+""".strip()),
+    "mcash": ("💰", "MCASH", """
+`!clip` — Panel tombol: 🎬 Submit Clip • 📜 History Clip • 🏆 Leaderboard
+`!createwallet` — Buat wallet MCASH
+`!mcash` — Cek saldo & mutasi *(hanya lewat DM bot)*
+`!withdraw` — Tarik ke DANA / ShopeePay / OVO *(hanya lewat DM bot)*
+`!rain <total> [maks penerima]` — Bagi MCASH ke user yang aktif chat
+📌 1000 MCASH = Rp1.000
+🔒 Semua info saldo hanya bisa dibuka di **DM bot**
 """.strip()),
     "util": ("🔎", "Info & Utilitas", """
 `!ping` — Cek latensi bot & koneksi
@@ -1885,6 +1895,17 @@ Durasi: `30m`, `12h`, `3d`, `1w`, `1d12h`
 `!snipe` — Pesan terakhir yang dihapus
 `!avatar [@user]` — Avatar ukuran penuh (`!av`/`!pp`/`!foto`)
 `!autoreply` / `!ar` — Kelola auto reply via DM
+""".strip()),
+    "mcash": ("💰", "MCASH", """
+`!gift @user <jumlah> [alasan]` — Kasih MCASH ke user
+`!takecoin @user <jumlah> [alasan]` — Koreksi / kurangi saldo
+`!setclipchannel #channel` — Channel tujuan clip untuk di-review
+`!setwdchannel [#channel]` — Channel notif withdraw (kosong = DM owner)
+`!mcashconfig` — Ringkasan pengaturan MCASH
+`!mcash @user` — Cek saldo user lain *(DM bot saja)*
+📌 Review clip: tombol **ACC + Input Coin** / **Reject** di pesan clip
+📌 Withdraw: tombol **Sudah Ditransfer** / **Tolak & Refund**
+📌 Command user MCASH: lihat `!help`
 """.strip()),
     "backup": ("💾", "Backup", """
 `!savesettings` — Simpan semua setting & data ke channel backup
@@ -5388,6 +5409,7 @@ class WalletPanelView(View):
 
 def mcash_register_views():
     """Dipanggil di on_ready: aktifkan lagi tombol review yang masih pending setelah restart."""
+    bot.add_view(ClipPanelView())
     d = _mc_load()
     for cid, c in d["clips"].items():
         if c["status"] == "pending" and c.get("message_id"):
@@ -5400,56 +5422,192 @@ def mcash_register_views():
 # ═══════════════════════════════════════════════════════
 #  COMMANDS — USER
 # ═══════════════════════════════════════════════════════
+# ── PRIVASI SALDO: info saldo hanya lewat DM bot ─────────
+class OpenDMView(View):
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.add_item(Button(label="Buka DM Bot", emoji="📩", style=discord.ButtonStyle.link,
+                             url=f"https://discord.com/users/{bot.user.id}"))
+
+async def _mc_dm_only(ctx):
+    await ctx.send(
+        f"🔒 {ctx.author.mention} Info saldo hanya bisa diakses lewat **DM bot**.\n"
+        f"Buka DM bot lalu ketik `!{ctx.invoked_with}`.",
+        view=OpenDMView(), delete_after=20)
+
+
+# ── CLIP CENTER: !clip → tombol-tombol ──────────────────
+_CLIP_ICON = {"pending": "⏳", "accepted": "✅", "rejected": "❌"}
+
+def _mc_history_embed(d: dict, user, show_amount: bool) -> discord.Embed:
+    clips = sorted((c for c in d["clips"].values() if c["uid"] == user.id),
+                   key=lambda c: c["id"], reverse=True)
+    acc  = sum(1 for c in clips if c["status"] == "accepted")
+    rej  = sum(1 for c in clips if c["status"] == "rejected")
+    pend = sum(1 for c in clips if c["status"] == "pending")
+    e = discord.Embed(title="📜 History Clip", color=discord.Color.blurple(),
+                      timestamp=datetime.datetime.now(datetime.timezone.utc))
+    e.set_author(name=user.display_name, icon_url=user.display_avatar.url)
+    if not clips:
+        e.description = "Kamu belum pernah submit clip.\nKlik **🎬 Submit Clip** di panel `!clip` untuk mulai."
+    else:
+        lines = []
+        for c in clips[:10]:
+            ts   = c.get("decided") or c["ts"]
+            link = c.get("link")
+            if not link:
+                label = "📎 Video"
+            elif len(link) <= 200:
+                label = f"[Link]({link})"
+            else:
+                label = "Link"
+            line = f"{_CLIP_ICON[c['status']]} **#{c['id']}** • {label} • <t:{ts}:d>"
+            if c["status"] == "accepted" and show_amount:
+                line += f" • **+{_mc_fmt(c.get('reward', 0))}** MCASH"
+            if c["status"] == "rejected":
+                line += f"\n　↳ {(c.get('reason') or '-')[:80]}"
+            lines.append(line)
+        e.description = "\n".join(lines)[:4000]
+    e.add_field(name="✅ ACC",     value=str(acc),  inline=True)
+    e.add_field(name="❌ Reject",  value=str(rej),  inline=True)
+    e.add_field(name="⏳ Pending", value=str(pend), inline=True)
+    foot = f"Menampilkan 10 terbaru dari {len(clips)} clip" if len(clips) > 10 else f"Total {len(clips)} clip"
+    if not show_amount:
+        foot += " • Nominal reward hanya tampil di DM bot"
+    e.set_footer(text=foot)
+    return e
+
+
+def _mc_leaderboard_embed(d: dict, show_amount: bool) -> discord.Embed:
+    now = datetime.datetime.now(WIB)
+    accepted = [c for c in d["clips"].values() if c["status"] == "accepted"]
+    month = []
+    for c in accepted:
+        t = _ts_to_wib(c.get("decided") or c["ts"])
+        if t.year == now.year and t.month == now.month:
+            month.append(c)
+
+    def board(items) -> str:
+        agg = {}
+        for c in items:
+            a = agg.setdefault(c["uid"], [0, 0])
+            a[0] += 1
+            a[1] += int(c.get("reward", 0) or 0)
+        top = sorted(agg.items(), key=lambda kv: (kv[1][0], kv[1][1]), reverse=True)[:10]
+        if not top:
+            return "*Belum ada clip yang di-ACC.*"
+        medals = ["🥇", "🥈", "🥉"]
+        out = []
+        for i, (uid, (n, total)) in enumerate(top):
+            icon = medals[i] if i < 3 else f"`{i + 1}.`"
+            line = f"{icon} <@{uid}> — **{n}** clip"
+            if show_amount:
+                line += f" • {_mc_fmt(total)} MCASH"
+            out.append(line)
+        return "\n".join(out)[:1024]
+
+    e = discord.Embed(title="🏆 Leaderboard Clipper", color=discord.Color.gold(),
+                      timestamp=datetime.datetime.now(datetime.timezone.utc))
+    e.add_field(name=f"📅 {BULAN_ID[now.month - 1]} {now.year}", value=board(month), inline=False)
+    e.add_field(name="🌟 Sepanjang Masa", value=board(accepted), inline=False)
+    foot = "Peringkat berdasarkan jumlah clip yang di-ACC"
+    if not show_amount:
+        foot += " • Nominal reward hanya tampil di DM bot"
+    e.set_footer(text=foot)
+    return e
+
+
+class ClipPanelView(View):
+    """Panel !clip (persistent). Semua balasan ephemeral → hanya terlihat oleh yang menekan."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Submit Clip", emoji="🎬", style=discord.ButtonStyle.success,
+                       custom_id="mcash_clip_submit")
+    async def submit_btn(self, interaction: discord.Interaction, button: Button):
+        if not _mc_wallet(_mc_load(), interaction.user.id):
+            return await interaction.response.send_message(
+                "❌ Kamu belum punya wallet. Ketik `!createwallet` dulu.", ephemeral=True)
+        await interaction.response.send_modal(ClipSubmitModal())
+
+    @discord.ui.button(label="History Clip", emoji="📜", style=discord.ButtonStyle.primary,
+                       custom_id="mcash_clip_history")
+    async def history_btn(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message(
+            embed=_mc_history_embed(_mc_load(), interaction.user, interaction.guild is None),
+            ephemeral=True)
+
+    @discord.ui.button(label="Leaderboard", emoji="🏆", style=discord.ButtonStyle.secondary,
+                       custom_id="mcash_clip_lb")
+    async def leaderboard_btn(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message(
+            embed=_mc_leaderboard_embed(_mc_load(), interaction.guild is None),
+            ephemeral=True)
+
+
+@bot.command(name="clip", aliases=["submitclip", "kirimclip"])
+async def clip_cmd(ctx):
+    """!clip → panel tombol (Submit Clip / History Clip / Leaderboard). Tidak menerima link lewat command."""
+    e = discord.Embed(
+        title="🎬 MCASH Clip Center",
+        description=(
+            "Kirim clip, pantau statusnya, dan lihat siapa clipper terbaik!\n\n"
+            "🎬 **Submit Clip** — kirim link clip untuk di-review admin\n"
+            "📜 **History Clip** — riwayat clip kamu (✅ ACC / ❌ Reject / ⏳ Pending)\n"
+            "🏆 **Leaderboard** — peringkat clipper bulan ini & sepanjang masa\n\n"
+            "💡 Belum punya wallet? Ketik `!createwallet`."),
+        color=discord.Color.gold())
+    e.set_footer(text="Asisten Lurah BFL • Clip Center")
+    await ctx.send(embed=e, view=ClipPanelView())
+
+
+# ═══════════════════════════════════════════════════════
+#  COMMANDS — USER
+# ═══════════════════════════════════════════════════════
 @bot.command(name="createwallet", aliases=["buatwallet", "daftarwallet"])
 async def createwallet_cmd(ctx):
-    """Buat wallet MCASH (semua user). Menampilkan panel Saldo / Withdraw / Submit Clip."""
+    """Buat wallet MCASH. Di server: hanya konfirmasi. Di DM: tampil saldo + panel."""
     d = _mc_load()
     new = _mc_wallet(d, ctx.author.id) is None
     if new:
         _mc_wallet(d, ctx.author.id, create=True)
         _mc_save(d)
-    d = _mc_load()
     head = "🎉 Wallet **MCASH** kamu berhasil dibuat!" if new else "✅ Kamu sudah punya wallet MCASH."
+    if ctx.guild is not None:
+        return await ctx.send(
+            f"{ctx.author.mention} {head}\n"
+            "🔒 Saldo & withdraw hanya bisa dibuka lewat **DM bot** (ketik `!mcash` di sana).\n"
+            "🎬 Mau kirim clip? Ketik `!clip`.",
+            view=OpenDMView(), delete_after=25)
+    d = _mc_load()
     await ctx.send(head, embed=_mc_wallet_embed(ctx.author, d), view=WalletPanelView(ctx.author.id))
 
 
 @bot.command(name="mcash", aliases=["saldo", "balance", "wallet", "bal"])
-async def mcash_cmd(ctx, member: discord.Member = None):
-    """Cek saldo. Admin bisa cek saldo user lain."""
+async def mcash_cmd(ctx, member: discord.User = None):
+    """Cek saldo — HANYA di DM bot. Admin bisa cek saldo user lain (juga di DM)."""
+    if ctx.guild is not None:
+        return await _mc_dm_only(ctx)
     target = ctx.author
     if member and member.id != ctx.author.id:
         if not is_admin(ctx.author):
-            return await ctx.send("❌ Kamu hanya bisa cek saldo sendiri.", delete_after=8)
+            return await ctx.send("❌ Kamu hanya bisa cek saldo sendiri.")
         target = member
     d = _mc_load()
     if not _mc_wallet(d, target.id):
         who = "Kamu" if target.id == ctx.author.id else target.display_name
         return await ctx.send(f"❌ {who} belum punya wallet. Ketik `!createwallet`.")
+    if target.id == ctx.author.id:
+        return await ctx.send(embed=_mc_wallet_embed(target, d), view=WalletPanelView(ctx.author.id))
     await ctx.send(embed=_mc_wallet_embed(target, d))
 
 
 @bot.command(name="withdraw", aliases=["wd", "tarik"])
 async def withdraw_cmd(ctx):
-    """Tarik MCASH ke DANA / ShopeePay / OVO."""
+    """Tarik MCASH ke DANA / ShopeePay / OVO — HANYA di DM bot."""
+    if ctx.guild is not None:
+        return await _mc_dm_only(ctx)
     await _mc_withdraw_menu(ctx.send, ctx.author)
-
-
-@bot.command(name="submitclip", aliases=["clip", "kirimclip"])
-async def submitclip_cmd(ctx, link: str = None, *, catatan: str = ""):
-    """!submitclip <link> [catatan]  — atau lampirkan file video."""
-    att = ctx.message.attachments[0] if ctx.message.attachments else None
-    if not att and not (link and re.match(r"^https?://\S+$", link)):
-        return await ctx.send("❌ Format: `!submitclip <link clip> [catatan]` atau lampirkan file video.", delete_after=10)
-    if att and link and not re.match(r"^https?://\S+$", link):  # teks biasa → jadikan catatan
-        catatan, link = f"{link} {catatan}".strip(), None
-    ok, msg = await _mc_submit_clip(ctx.author, link if (link and re.match(r"^https?://\S+$", link)) else None,
-                                    catatan.strip(), att)
-    await ctx.send(msg, delete_after=15 if ok else 12)
-    if ok and ctx.guild:
-        try:
-            await ctx.message.delete()
-        except Exception:
-            pass
 
 
 @bot.command(name="rain")
@@ -5482,7 +5640,7 @@ async def rain_cmd(ctx, jumlah: str = None, max_penerima: str = None):
         if not w:
             return await ctx.send("❌ Kamu belum punya wallet. Ketik `!createwallet`.")
         if w["balance"] < spent:
-            return await ctx.send(f"❌ Saldo tidak cukup. Butuh **{_mc_fmt(spent)} MCASH**, saldo kamu **{_mc_fmt(w['balance'])} MCASH**.")
+            return await ctx.send(f"❌ Saldo tidak cukup untuk rain **{_mc_fmt(spent)} MCASH**. Cek saldo lewat DM bot.")
         _mc_add(d, ctx.author.id, -spent, "rain_out", f"Rain ke {len(members)} user")
     for m in members:
         _mc_add(d, m.id, per, "rain_in", f"Rain dari {ctx.author.display_name}")
@@ -5502,7 +5660,7 @@ async def rain_cmd(ctx, jumlah: str = None, max_penerima: str = None):
                      f"💰 Tiap orang dapat **{_mc_fmt(per)} MCASH** (≈ {_mc_idr(per)})\n"
                      f"📦 Total dibagikan: **{_mc_fmt(spent)} MCASH**\n\n{names}"),
         color=discord.Color.blue(), timestamp=datetime.datetime.now(datetime.timezone.utc))
-    e.set_footer(text="Cek saldo dengan !mcash" + (" • Rain dari admin" if admin else ""))
+    e.set_footer(text="Cek saldo lewat DM bot (!mcash)" + (" • Rain dari admin" if admin else ""))
     await ctx.send(embed=e)
 
 
@@ -5524,8 +5682,12 @@ async def gift_cmd(ctx, member: discord.Member = None, jumlah: str = None, *, al
     await ctx.send(embed=discord.Embed(
         title="🎁 Gift MCASH",
         description=(f"{member.mention} menerima **{_mc_fmt(amt)} MCASH** (≈ {_mc_idr(amt)}) dari {ctx.author.mention}\n"
-                     f"📝 {alasan}\n💰 Saldo sekarang: **{_mc_fmt(bal)} MCASH**"),
+                     f"📝 {alasan}\n🔒 Cek saldo lewat DM bot."),
         color=discord.Color.magenta()))
+    await _mc_dm(member.id, discord.Embed(
+        title="🎁 Kamu menerima MCASH!", color=discord.Color.magenta(),
+        description=f"**+{_mc_fmt(amt)} MCASH** dari admin.\n📝 {alasan}\n"
+                    f"Saldo sekarang: **{_mc_fmt(bal)} MCASH** (≈ {_mc_idr(bal)})"))
 
 
 @bot.command(name="takecoin", aliases=["removecoin"])
@@ -5543,7 +5705,11 @@ async def takecoin_cmd(ctx, member: discord.Member = None, jumlah: str = None, *
     amt = min(amt, w["balance"])
     _mc_add(d, member.id, -amt, "takecoin", alasan)
     _mc_save(d)
-    await ctx.send(f"✅ **{_mc_fmt(amt)} MCASH** dikurangi dari {member.mention}. Saldo sekarang **{_mc_fmt(w['balance'])} MCASH**.")
+    await ctx.send(f"✅ **{_mc_fmt(amt)} MCASH** dikurangi dari {member.mention}. 🔒 Detail saldo dikirim via DM.")
+    await _mc_dm(member.id, discord.Embed(
+        title="⚠️ Saldo MCASH dikurangi", color=discord.Color.orange(),
+        description=f"**-{_mc_fmt(amt)} MCASH** oleh admin.\n📝 {alasan}\n"
+                    f"Saldo sekarang: **{_mc_fmt(w['balance'])} MCASH**"))
 
 
 @bot.command(name="setclipchannel")
@@ -5587,7 +5753,8 @@ async def mcashconfig_cmd(ctx):
     e.add_field(name="Channel Clip",     value=f"<#{c['clip_channel']}>" if c.get("clip_channel") else "❌ belum diatur (`!setclipchannel`)", inline=False)
     e.add_field(name="Channel Withdraw", value=f"<#{c['wd_channel']}>" if c.get("wd_channel") else "DM owner (`!setwdchannel`)", inline=False)
     e.add_field(name="Wallet", value=str(len(d["wallets"])), inline=True)
-    e.add_field(name="Total Saldo Beredar", value=f"{_mc_fmt(total)} MCASH", inline=True)
+    if ctx.guild is None:  # info saldo hanya di DM
+        e.add_field(name="Total Saldo Beredar", value=f"{_mc_fmt(total)} MCASH", inline=True)
     e.add_field(name="Clip Pending", value=str(pend_clip), inline=True)
     e.add_field(name="WD Pending", value=str(pend_wd), inline=True)
     e.add_field(name="Min. Withdraw", value=f"{_mc_fmt(MCASH_MIN_WD)} MCASH", inline=True)
@@ -5597,12 +5764,12 @@ async def mcashconfig_cmd(ctx):
 @bot.command(name="mcashhelp", aliases=["helpmcash"])
 async def mcashhelp_cmd(ctx):
     e = discord.Embed(title="💰 MCASH — Bantuan", color=discord.Color.gold(),
-                      description="**1000 MCASH = Rp1.000**")
+                      description="**1000 MCASH = Rp1.000**\n🔒 Info saldo hanya bisa dibuka di **DM bot**.")
     e.add_field(name="👤 User", inline=False, value=(
-        "`!createwallet` — buat wallet & buka panel\n"
-        "`!mcash` — cek saldo\n"
-        "`!submitclip <link>` — kirim clip (atau lampirkan video)\n"
-        f"`!withdraw` — tarik ke DANA / ShopeePay / OVO (min {_mc_fmt(MCASH_MIN_WD)})\n"
+        "`!clip` — panel: Submit Clip • History Clip • Leaderboard\n"
+        "`!createwallet` — buat wallet\n"
+        "`!mcash` — cek saldo *(DM bot)*\n"
+        f"`!withdraw` — tarik ke DANA / ShopeePay / OVO, min {_mc_fmt(MCASH_MIN_WD)} *(DM bot)*\n"
         "`!rain <total> [maks penerima]` — bagi MCASH ke user aktif 10 menit terakhir"))
     if is_admin(ctx.author):
         e.add_field(name="🛡️ Admin", inline=False, value=(
